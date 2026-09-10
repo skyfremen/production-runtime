@@ -79,6 +79,14 @@ def run(manifest_path, concurrency):
     with INTERNAL_LOG.open("a", encoding="utf-8") as log, contextlib.redirect_stdout(log), contextlib.redirect_stderr(log):
         production = pipeline.run(ordered)
 
+    failed_stages = {}
+    failures = Path("/tmp/batch-failures.txt")
+    if failures.exists():
+        for line in failures.read_text(encoding="utf-8").splitlines():
+            parts = line.split(" | ", 2)
+            if len(parts) >= 2:
+                failed_stages[parts[0]] = parts[1].split(" ", 1)[0]
+
     success = 0
     failed = int(production["failed"])
     pending = []
@@ -106,6 +114,9 @@ def run(manifest_path, concurrency):
         "peak_memory_percent": float(production["peak_memory_percent"]),
     }
     PUBLIC_SUMMARY.write_text(json.dumps(summary, sort_keys=True) + "\n")
+    for ordinal, request in enumerate(ordered, 1):
+        if request in failed_stages:
+            print(f"item {ordinal:02d} {failed_stages[request]} FAIL")
     print(
         "batch success={success} failed={failed} skipped={skipped}".format(**summary)
     )
