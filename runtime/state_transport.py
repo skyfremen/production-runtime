@@ -242,8 +242,21 @@ def complete(manifest_path, summary_path):
         "failed": int(summary.get("failed", 0)),
         "skipped": int(summary.get("skipped", 0)),
     }
-    PrivateState().create(
-        f"{COMPLETION_PREFIX}{manifest['batch_id']}.json",
+    state = PrivateState()
+    path = f"{COMPLETION_PREFIX}{manifest['batch_id']}.json"
+    try:
+        existing_raw, _existing_sha = state.current_content(path)
+        existing = json.loads(existing_raw)
+    except TransportError:
+        existing = None
+    identity_keys = ("schema_version", "batch_id", "source_sha", "success", "failed", "skipped")
+    if existing is not None:
+        if all(existing.get(key) == payload[key] for key in identity_keys):
+            print("Private completion already recorded")
+            return
+        raise TransportError("Immutable private completion already differs")
+    state.create(
+        path,
         payload,
         "[production complete] record opaque batch completion",
     )
