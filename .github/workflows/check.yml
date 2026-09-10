@@ -14,7 +14,7 @@ jobs:
     timeout-minutes: 20
     environment: exec
     container:
-      image: ghcr.io/skyfremen/youtube-shorts-runner:latest
+      image: ghcr.io/skyfremen/youtube-shorts-runner@sha256:a4ecdb1be1dd1dd4e2dec36d2f507471091290eee5963b0ae4e3d65469bf5e76
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -38,6 +38,17 @@ jobs:
         run: |
           if python runtime/acceptance.py > /tmp/runtime-acceptance.log 2>&1; then
             echo "Production-equivalent acceptance PASS: items=24"
+            python - <<'PY'
+          import json
+          summary = json.load(open("/tmp/runtime-acceptance-summary.json", encoding="utf-8"))
+          keys = (
+              "render_seconds", "resolution", "fps", "video_codec", "audio_codec",
+              "audio_stream_count", "tts_backend", "tts_voice", "tts_speed",
+              "tts_init_seconds", "alignment_backend", "alignment_coverage",
+              "validation_count", "upload_count",
+          )
+          print("Acceptance metrics: " + " ".join(f"{key}={summary[key]}" for key in keys))
+          PY
           else
             phase="$(cat /tmp/runtime-acceptance-phase 2>/dev/null || echo startup)"
             echo "::error::Production-equivalent acceptance FAIL at ${phase}"
