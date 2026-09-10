@@ -1,20 +1,19 @@
-name: Production Execution
-run-name: Execute opaque batch ${{ inputs.batch_id }}
+name: Run
 
 on:
   workflow_dispatch:
     inputs:
       batch_id:
-        description: Opaque private batch identifier
+        description: Opaque identifier
         required: true
         type: string
       source_sha:
-        description: Exact immutable private source revision
+        description: Exact source revision
         required: true
         type: string
 
 concurrency:
-  group: production-${{ inputs.batch_id }}
+  group: run-${{ inputs.batch_id }}
   cancel-in-progress: false
 
 permissions:
@@ -22,7 +21,7 @@ permissions:
   packages: read
 
 jobs:
-  production:
+  run:
     runs-on: ubuntu-latest
     timeout-minutes: 180
     environment: exec
@@ -46,7 +45,7 @@ jobs:
       STORY_TEST_MODE: 'false'
       SHORTS_CONCURRENCY: '2'
     steps:
-      - name: Load runtime
+      - name: Prepare
         shell: bash
         run: |
           python - <<'PY'
@@ -58,19 +57,19 @@ jobs:
           tar --extract --gzip --file /tmp/runtime-source.tgz \
             --strip-components 1 --directory "${GITHUB_WORKSPACE}"
 
-      - name: Fetch exact private inputs
+      - name: Load
         run: >-
           python runtime/state_transport.py fetch
           --batch-id "${{ inputs.batch_id }}"
           --source-sha "${{ inputs.source_sha }}"
           --output /tmp/runtime-batch.json
 
-      - name: Execute bounded batch
+      - name: Execute
         id: execute
         continue-on-error: true
         run: python runtime/runner.py --manifest /tmp/runtime-batch.json --concurrency 2
 
-      - name: Write private completion state
+      - name: Finalize
         id: completion
         if: ${{ always() && steps.execute.outcome == 'success' }}
         continue-on-error: true
@@ -82,16 +81,15 @@ jobs:
               --summary /tmp/runtime-public-summary.json
           fi
 
-      - name: Enforce production result
+      - name: Verify
         if: ${{ always() }}
         shell: bash
         run: |
           if [ "${{ steps.execute.outcome }}" != "success" ]; then
-            echo "::error::Production batch failed; use private recovery state."
+            echo "::error::Execution failed."
             exit 1
           fi
           if [ "${{ steps.completion.outcome }}" != "success" ]; then
-            echo "::error::Private completion acknowledgement failed."
+            echo "::error::Finalization failed."
             exit 1
           fi
-
