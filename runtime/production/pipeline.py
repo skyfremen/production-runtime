@@ -459,7 +459,13 @@ class ProductionPipeline:
                     try:
                         item = self.prepare(index, request)
                     except Exception as exc:
-                        self.record_failure(request, "prepare", exc)
+                        message = str(exc)
+                        stage = (
+                            "validation" if "validate_content.py" in message
+                            else "authorization" if "publish.py" in message
+                            else "prepare"
+                        )
+                        self.record_failure(request, stage, exc)
                         continue
                     if item is None:
                         continue
