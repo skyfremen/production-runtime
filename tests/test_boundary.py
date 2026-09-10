@@ -1,5 +1,6 @@
 import ast
 import os
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,6 +8,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 RUN = ROOT / ".github/workflows/run.yml"
+CHECK = ROOT / ".github/workflows/check.yml"
 
 
 class BoundaryTests(unittest.TestCase):
@@ -42,6 +44,33 @@ class BoundaryTests(unittest.TestCase):
                     ref = line.split("@", 1)[-1].split()[0]
                     self.assertRegex(ref, r"^[0-9a-f]{40}$")
 
+    def test_check_workflow_has_no_environment_secrets(self):
+        text = CHECK.read_text()
+        self.assertNotIn("environment:", text)
+        refs = set(re.findall(r"secrets\.([A-Z0-9_]+)", text))
+        self.assertEqual(refs, {"GITHUB_TOKEN"})
+        for forbidden in (
+            "PRIVATE_STATE_TOKEN",
+            "PRIVATE_STATE_REPOSITORY",
+            "YOUTUBE_CLIENT_ID",
+            "YOUTUBE_CLIENT_SECRET",
+            "YOUTUBE_REFRESH_TOKEN",
+            "PEXELS_API_KEY",
+        ):
+            self.assertNotIn(forbidden, text)
+
+    def test_workflow_display_labels_are_generic(self):
+        visible = []
+        for workflow in (RUN, CHECK):
+            for line in workflow.read_text().splitlines():
+                stripped = line.strip()
+                if stripped.startswith("name:") or stripped.startswith("- name:") or "echo \"" in stripped:
+                    visible.append(stripped.lower())
+            self.assertNotIn("run-name:", workflow.read_text())
+        rendered = "\n".join(visible)
+        for forbidden in ("production", "private", "youtube", "wacky", "analytics", "recovery"):
+            self.assertNotIn(forbidden, rendered)
+
     def test_runtime_does_not_target_public_contents(self):
         state = (ROOT / "runtime/state_transport.py").read_text()
         recovery = (ROOT / "runtime/publishing/recovery_state.py").read_text()
@@ -69,4 +98,3 @@ class BoundaryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
