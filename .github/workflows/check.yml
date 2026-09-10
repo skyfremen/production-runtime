@@ -25,9 +25,12 @@ jobs:
       - name: Load runtime
         shell: bash
         run: |
-          curl --fail --silent --show-error --location \
-            "https://api.github.com/repos/${GITHUB_REPOSITORY}/tarball/${GITHUB_SHA}" \
-            --output /tmp/runtime-source.tgz
+          python - <<'PY'
+          import os
+          import urllib.request
+          url = f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/tarball/{os.environ['GITHUB_SHA']}"
+          urllib.request.urlretrieve(url, "/tmp/runtime-source.tgz")
+          PY
           tar --extract --gzip --file /tmp/runtime-source.tgz \
             --strip-components 1 --directory "${GITHUB_WORKSPACE}"
       - name: Run static and unit checks
