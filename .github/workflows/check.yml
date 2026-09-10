@@ -23,7 +23,13 @@ jobs:
       RUNTIME_COMMIT_SHA: ${{ github.sha }}
     steps:
       - name: Load runtime
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        shell: bash
+        run: |
+          curl --fail --silent --show-error --location \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/tarball/${GITHUB_SHA}" \
+            --output /tmp/runtime-source.tgz
+          tar --extract --gzip --file /tmp/runtime-source.tgz \
+            --strip-components 1 --directory "${GITHUB_WORKSPACE}"
       - name: Run static and unit checks
         shell: bash
         run: |
