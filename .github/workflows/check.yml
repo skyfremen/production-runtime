@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     container:
-      image: ghcr.io/skyfremen/youtube-shorts-runner@sha256:a4ecdb1be1dd1dd4e2dec36d2f507471091290eee5963b0ae4e3d65469bf5e76
+      image: ghcr.io/skyfremen/runtime-base@sha256:e70690e29f9323bd59e6d305b3c15594a5d877ef785db159c8048eb297737050
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
