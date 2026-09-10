@@ -72,7 +72,7 @@ jobs:
 
       - name: Write private completion state
         id: completion
-        if: ${{ always() }}
+        if: ${{ always() && steps.execute.outcome == 'success' }}
         continue-on-error: true
         shell: bash
         run: |
