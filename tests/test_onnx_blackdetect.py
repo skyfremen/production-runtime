@@ -56,7 +56,7 @@ class OnnxNarrationTests(unittest.TestCase):
             validate_audio(np.ones(1000, dtype=np.float32), 24000)
 
     def test_renderer_keeps_primary_and_fallback_contract(self):
-        source = (ROOT / "rendering/render.py").read_text(encoding="utf-8")
+        source = (ROOT / "runtime/rendering/render.py").read_text(encoding="utf-8")
         self.assertIn("OnnxKokoroSynthesizer", source)
         self.assertIn("PytorchKokoroSynthesizer", source)
         self.assertIn("narration_backend_requested", source)

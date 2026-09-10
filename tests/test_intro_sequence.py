@@ -37,7 +37,7 @@ class IntroSequenceTests(unittest.TestCase):
         self.assertNotIn("0:00:00.00", "\n".join(events))
 
     def test_renderer_fades_card_after_lead_and_intro_and_offsets_captions(self):
-        source = (ROOT / "rendering/render.py").read_text()
+        source = (ROOT / "runtime/rendering/render.py").read_text()
         self.assertEqual(START_LEAD_SECONDS, 0.50)
         self.assertIn("card_fade_start = START_LEAD_SECONDS + intro_duration", source)
         self.assertIn("card_fade_dur = CARD_TRANSITION_SECONDS", source)
