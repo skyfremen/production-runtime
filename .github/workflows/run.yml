@@ -1,0 +1,90 @@
+name: Production Execution
+run-name: Execute opaque batch ${{ inputs.batch_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      batch_id:
+        description: Opaque private batch identifier
+        required: true
+        type: string
+      source_sha:
+        description: Exact immutable private source revision
+        required: true
+        type: string
+
+concurrency:
+  group: production-${{ inputs.batch_id }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  production:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    environment: exec
+    container:
+      image: ghcr.io/skyfremen/youtube-shorts-runner:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    env:
+      PYTHONPATH: runtime
+      PRIVATE_STATE_TOKEN: ${{ secrets.PRIVATE_STATE_TOKEN }}
+      PRIVATE_STATE_REPOSITORY: ${{ secrets.PRIVATE_STATE_REPOSITORY }}
+      YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+      YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+      YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+      PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+      RUNTIME_COMMIT_SHA: ${{ github.sha }}
+      VIDEO_WIDTH: '720'
+      VIDEO_HEIGHT: '1280'
+      VIDEO_FPS: '30'
+      STORY_TEST_MODE: 'false'
+      SHORTS_CONCURRENCY: '2'
+    steps:
+      - name: Load runtime
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 1
+
+      - name: Fetch exact private inputs
+        run: >-
+          python runtime/state_transport.py fetch
+          --batch-id "${{ inputs.batch_id }}"
+          --source-sha "${{ inputs.source_sha }}"
+          --output /tmp/runtime-batch.json
+
+      - name: Execute bounded batch
+        id: execute
+        continue-on-error: true
+        run: python runtime/runner.py --manifest /tmp/runtime-batch.json --concurrency 2
+
+      - name: Write private completion state
+        id: completion
+        if: ${{ always() }}
+        continue-on-error: true
+        shell: bash
+        run: |
+          if [ -f /tmp/runtime-public-summary.json ]; then
+            python runtime/state_transport.py complete \
+              --manifest /tmp/runtime-batch.json \
+              --summary /tmp/runtime-public-summary.json
+          fi
+
+      - name: Enforce production result
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          if [ "${{ steps.execute.outcome }}" != "success" ]; then
+            echo "::error::Production batch failed; use private recovery state."
+            exit 1
+          fi
+          if [ "${{ steps.completion.outcome }}" != "success" ]; then
+            echo "::error::Private completion acknowledgement failed."
+            exit 1
+          fi
+

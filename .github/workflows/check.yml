@@ -1,0 +1,45 @@
+name: Runtime Check
+run-name: Verify execution boundary
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: exec
+    container:
+      image: ghcr.io/skyfremen/youtube-shorts-runner:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    env:
+      PYTHONPATH: runtime
+      RUNTIME_COMMIT_SHA: ${{ github.sha }}
+    steps:
+      - name: Load runtime
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Run static and unit checks
+        shell: bash
+        run: |
+          if python -m unittest discover -s tests > /tmp/runtime-tests.log 2>&1; then
+            echo "Runtime test suite PASS"
+          else
+            echo "::error::Runtime test suite FAIL"
+            exit 1
+          fi
+      - name: Run production-equivalent acceptance
+        shell: bash
+        run: |
+          if python runtime/acceptance.py > /tmp/runtime-acceptance.log 2>&1; then
+            echo "Production-equivalent acceptance PASS: items=24"
+          else
+            phase="$(cat /tmp/runtime-acceptance-phase 2>/dev/null || echo startup)"
+            echo "::error::Production-equivalent acceptance FAIL at ${phase}"
+            exit 1
+          fi
