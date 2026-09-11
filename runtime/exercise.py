@@ -58,8 +58,14 @@ def main():
             render_seconds, metrics = dry_run.render_smoke(request, root)
         except Exception as exc:
             if isinstance(exc, subprocess.CalledProcessError):
-                detail = str(exc.stderr or exc.output or "synthetic command failed")[-500:]
-                print(f"::error::E_VERIFY_001 synthetic-check detail={detail}")
+                command = " ".join(str(x) for x in (exc.cmd or []))
+                if "color=c=" in command:
+                    phase("s02j")
+                elif "caption-contrast.png" in command:
+                    phase("s02k")
+                else:
+                    phase("s02l")
+                raise
             message = str(exc).lower()
             if "identity resource" in message or "font" in message or "emoji" in message:
                 phase("s02a")
