@@ -40,6 +40,22 @@ class VerificationPollingTests(unittest.TestCase):
         self.assertEqual(payload["error_code"], "E_VERIFY_001")
         self.assertFalse(payload["retryable"])
 
+    def test_bounded_processing_delay_writes_retryable_classification(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "classification.json"
+            pending = verify.VerificationPending("YouTube processing not complete")
+            with patch.object(verify, "FAILURE_CLASSIFICATION", target), patch.object(
+                verify, "main", side_effect=pending
+            ):
+                with self.assertRaises(verify.VerificationPending):
+                    verify.guarded_main()
+            payload = json.loads(target.read_text(encoding="utf-8"))
+        self.assertEqual(payload["error_code"], "E_VERIFY_001")
+        self.assertTrue(payload["retryable"])
+
+    def test_verification_pending_is_not_a_deterministic_recovery_block(self):
+        self.assertFalse(issubclass(verify.VerificationPending, RecoveryBlocked))
+
 
 if __name__ == '__main__':
     unittest.main()
