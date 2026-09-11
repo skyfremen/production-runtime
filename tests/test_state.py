@@ -13,9 +13,18 @@ BASE = ROOT / "runtime"
 sys.path.insert(0, str(BASE))
 
 from output.execute import prepare
-from output.state import GitHubState, RecoveryBlocked, Stored, blob_sha, encoded_json, record_path
+from output.state import (
+    GitHubState,
+    RecoveryBlocked,
+    Stored,
+    blob_sha,
+    encoded_json,
+    index_bootstrap_path,
+    index_path,
+    record_path,
+)
 from test_schema import valid_request
-from output.transfer import build_upload_body, execute_upload, find_existing_by_marker
+from output.transfer import build_upload_body, ensure_mapping, execute_upload, find_after_intent
 from output.verify import RETRY_DELAYS, VerificationPending, verify_video
 from base.contract import marker_tag
 
@@ -27,9 +36,19 @@ CHANNEL = {
 }
 
 
+def bootstrap_record():
+    return {
+        "schema_version": 1,
+        "status": "complete",
+        "historical_mapping_count": 0,
+        "conflicts": 0,
+        "youtube_api_required": False,
+    }
+
+
 class MemoryState:
     def __init__(self):
-        self.records = {}
+        self.records = {index_bootstrap_path(): bootstrap_record()}
         self.writes = []
 
     def load(self, path):
@@ -107,6 +126,16 @@ def fixture():
         },
     }
     return request, identity, record, item
+
+
+def mapping_for(identity, video_id=VIDEO_ID):
+    return {
+        "schema_version": 1,
+        "record_type": "mapping",
+        **identity,
+        "youtube_video_id": video_id,
+        "expected_channel_id": CHANNEL["id"],
+    }
 
 
 def client_for(video_responses):
@@ -236,7 +265,7 @@ class RecoveryTests(unittest.TestCase):
         self.request, self.identity, self.record, self.item = fixture()
         self.state = MemoryState()
 
-    def execute(self):
+    def execute(self, youtube=None):
         return execute_upload(
             self.request,
             Path(self.temp.name) / "video.mp4",
@@ -245,12 +274,11 @@ class RecoveryTests(unittest.TestCase):
             channel=CHANNEL,
             selection={},
             render_meta={},
-            youtube=Mock(),
+            youtube=youtube or Mock(),
         )
 
-    @patch("output.transfer.find_existing_by_marker", return_value=None)
     @patch("output.transfer.upload_new", return_value={"id": VIDEO_ID})
-    def test_normal_rerun_reuses_id_and_calls_insert_once(self, insert, _lookup):
+    def test_normal_rerun_reuses_id_and_calls_insert_once(self, insert):
         first, recovered = self.execute()
         second, recovered_again = self.execute()
         self.assertFalse(recovered)
@@ -262,9 +290,10 @@ class RecoveryTests(unittest.TestCase):
             self.request["publication"]["publish_at"],
         )
         insert.assert_called_once()
-        self.assertEqual(len(self.state.writes), 2)
+        self.assertEqual(len(self.state.writes), 3)
+        self.assertIn(index_path(self.identity["content_id"]), self.state.records)
 
-    @patch("output.transfer.find_existing_by_marker", return_value=None)
+    @patch("output.transfer.find_after_intent", return_value=None)
     def test_concurrent_same_content_id_can_only_reach_one_insert(self, _lookup):
         self.state = AtomicMemoryState()
         insert_started = threading.Event()
@@ -291,7 +320,7 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(stored.data["youtube_video_id"], VIDEO_ID)
         self.assertEqual(len(insert_calls), 1)
 
-    @patch("output.transfer.find_existing_by_marker", return_value=None)
+    @patch("output.transfer.find_after_intent", return_value=None)
     @patch("output.transfer.upload_new", side_effect=TimeoutError("response lost"))
     def test_lost_response_and_invisible_metadata_fence_all_future_uploads(
         self, insert, _lookup
@@ -305,26 +334,25 @@ class RecoveryTests(unittest.TestCase):
 
     @patch("output.transfer.upload_new", side_effect=TimeoutError("response lost"))
     def test_lost_response_recovers_later_without_another_insert(self, insert):
-        with patch("output.transfer.find_existing_by_marker", return_value=None):
+        with patch("output.transfer.find_after_intent", return_value=None):
             with self.assertRaises(RecoveryBlocked):
                 self.execute()
-        with patch("output.transfer.find_existing_by_marker", return_value=self.item):
+        with patch("output.transfer.find_after_intent", return_value=self.item):
             stored, recovered = self.execute()
         self.assertTrue(recovered)
         self.assertEqual(stored.data["youtube_video_id"], VIDEO_ID)
+        self.assertIn(index_path(self.identity["content_id"]), self.state.records)
         insert.assert_called_once()
 
-    @patch("output.transfer.find_existing_by_marker", return_value=None)
     @patch("output.transfer.upload_new")
-    def test_intent_write_failure_prevents_upload(self, insert, _lookup):
+    def test_intent_write_failure_prevents_upload(self, insert):
         self.state.create = Mock(side_effect=RecoveryBlocked("GitHub unavailable"))
         with self.assertRaises(RecoveryBlocked):
             self.execute()
         insert.assert_not_called()
 
-    @patch("output.transfer.find_existing_by_marker", return_value=None)
     @patch("output.transfer.upload_new", return_value={"id": VIDEO_ID})
-    def test_upload_record_commit_failure_is_recovered_from_intent(self, insert, lookup):
+    def test_upload_record_commit_failure_is_recovered_from_intent(self, insert):
         real_create = self.state.create
 
         def fail_upload(path, data):
@@ -336,10 +364,11 @@ class RecoveryTests(unittest.TestCase):
         with self.assertRaises(RecoveryBlocked):
             self.execute()
         self.state.create = real_create
-        lookup.return_value = self.item
-        stored, recovered = self.execute()
+        with patch("output.transfer.find_after_intent", return_value=self.item):
+            stored, recovered = self.execute()
         self.assertTrue(recovered)
         self.assertEqual(stored.data["youtube_video_id"], VIDEO_ID)
+        self.assertIn(index_path(self.identity["content_id"]), self.state.records)
         insert.assert_called_once()
 
     @patch("output.transfer.upload_new")
@@ -348,29 +377,120 @@ class RecoveryTests(unittest.TestCase):
             prepare(self.request, self.identity, self.state, Mock(), CHANNEL, True)
         insert.assert_not_called()
 
+    def test_index_hit_is_verified_and_never_inserted(self):
+        self.state.records[index_path(self.identity["content_id"])] = mapping_for(self.identity)
+        youtube = client_for([[self.item]])
+        with patch("output.transfer.upload_new") as insert:
+            with self.assertRaisesRegex(RecoveryBlocked, "upload evidence is missing"):
+                self.execute(youtube)
+        insert.assert_not_called()
+        self.assertEqual(youtube.videos.return_value.list.call_count, 1)
+
+    def test_deleted_indexed_video_fails_closed(self):
+        self.state.records[index_path(self.identity["content_id"])] = mapping_for(self.identity)
+        youtube = client_for([[]])
+        with patch("output.transfer.upload_new") as insert:
+            with self.assertRaisesRegex(RecoveryBlocked, "unavailable"):
+                self.execute(youtube)
+        insert.assert_not_called()
+
+    def test_index_conflict_cannot_overwrite_existing_mapping(self):
+        self.state.records[index_path(self.identity["content_id"])] = mapping_for(self.identity)
+        changed = copy.deepcopy(self.record)
+        changed["youtube_video_id"] = "ZyXwVuTsR10"
+        with self.assertRaises(RecoveryBlocked):
+            ensure_mapping(self.state, self.identity, changed, CHANNEL)
+        self.assertEqual(
+            self.state.records[index_path(self.identity["content_id"])]["youtube_video_id"],
+            VIDEO_ID,
+        )
+
+    def test_missing_bootstrap_fences_fresh_upload(self):
+        self.state.records.pop(index_bootstrap_path())
+        with patch("output.transfer.upload_new") as insert:
+            with self.assertRaisesRegex(RecoveryBlocked, "bootstrap"):
+                self.execute()
+        insert.assert_not_called()
+
     def test_multiple_marker_matches_fail_closed(self):
         other = copy.deepcopy(self.item)
         other["id"] = "another0000"
-        client = client_for([[self.item, other]])
-        client.playlistItems.return_value.list.return_value.execute.return_value = {
-            "items": [
-                {"contentDetails": {"videoId": VIDEO_ID}},
-                {"contentDetails": {"videoId": "another0000"}},
-            ]
-        }
-        with self.assertRaisesRegex(RecoveryBlocked, "Multiple"):
-            find_existing_by_marker(client, self.identity["content_id"], channel=CHANNEL)
-
-    def test_inventory_truncation_is_not_absence(self):
         client = Mock()
         client.playlistItems.return_value.list.return_value.execute.return_value = {
-            "items": [{"contentDetails": {"videoId": VIDEO_ID}}],
+            "items": [
+                {
+                    "contentDetails": {"videoId": VIDEO_ID},
+                    "snippet": {"publishedAt": "2099-09-09T15:51:00Z"},
+                },
+                {
+                    "contentDetails": {"videoId": "another0000"},
+                    "snippet": {"publishedAt": "2099-09-09T15:51:01Z"},
+                },
+            ]
+        }
+        client.videos.return_value.list.return_value.execute.return_value = {
+            "items": [self.item, other]
+        }
+        intent = copy.deepcopy(self.record)
+        intent["record_type"] = "intent"
+        with self.assertRaisesRegex(RecoveryBlocked, "Multiple"):
+            find_after_intent(
+                client,
+                intent,
+                self.identity,
+                channel=CHANNEL,
+            )
+
+    def test_bounded_recovery_exhaustion_is_not_absence(self):
+        client = Mock()
+        client.playlistItems.return_value.list.return_value.execute.return_value = {
+            "items": [
+                {
+                    "contentDetails": {"videoId": VIDEO_ID},
+                    "snippet": {"publishedAt": "2099-09-09T15:51:00Z"},
+                }
+            ],
             "nextPageToken": "more",
         }
-        with self.assertRaisesRegex(RecoveryBlocked, "inventory limit"):
-            find_existing_by_marker(
-                client, self.identity["content_id"], max_videos=1, channel=CHANNEL
+        client.videos.return_value.list.return_value.execute.return_value = {"items": []}
+        intent = copy.deepcopy(self.record)
+        intent["record_type"] = "intent"
+        with self.assertRaisesRegex(RecoveryBlocked, "Bounded post-intent"):
+            find_after_intent(
+                client,
+                intent,
+                self.identity,
+                max_videos=1,
+                channel=CHANNEL,
             )
+
+    def test_large_logical_history_never_changes_recovery_bound(self):
+        intent = copy.deepcopy(self.record)
+        intent["record_type"] = "intent"
+        rows = [
+            {
+                "contentDetails": {"videoId": f"A{i:010d}"[-11:]},
+                "snippet": {"publishedAt": "2099-09-09T15:51:00Z"},
+            }
+            for i in range(50)
+        ]
+        for logical_size in (5_000, 10_000, 50_000, 100_000):
+            with self.subTest(logical_size=logical_size):
+                client = Mock()
+                client.playlistItems.return_value.list.return_value.execute.return_value = {
+                    "items": rows,
+                    "nextPageToken": f"remaining-{logical_size}",
+                }
+                client.videos.return_value.list.return_value.execute.return_value = {"items": []}
+                with self.assertRaisesRegex(RecoveryBlocked, "Bounded post-intent"):
+                    find_after_intent(
+                        client,
+                        intent,
+                        self.identity,
+                        max_videos=50,
+                        channel=CHANNEL,
+                    )
+                self.assertEqual(client.playlistItems.return_value.list.call_count, 1)
 
     def test_github_evidence_cannot_be_overwritten(self):
         state = object.__new__(GitHubState)
@@ -413,7 +533,9 @@ class RecoveryTests(unittest.TestCase):
         )
         self.assertFalse(stored.created)
 
-    def test_github_state_cannot_write_requests_or_code(self):
+    def test_github_state_limits_writes_to_private_state_contract(self):
+        GitHubState.allowed(index_bootstrap_path())
+        GitHubState.allowed(index_path(self.identity["content_id"]))
         for path in (
             "runtime/transform/compose.py",
             self.identity["request_path"],
