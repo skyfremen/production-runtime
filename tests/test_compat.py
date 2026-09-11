@@ -57,6 +57,14 @@ class CompatibilityContractTests(unittest.TestCase):
         self.assertFalse(payload["behavior"]["renditions"]["hd_landscape"]["suitable"])
         self.assertTrue(payload["behavior"]["renditions"]["uhd_landscape"]["suitable"])
 
+    def test_production_boundary_requires_fingerprint(self):
+        workflow = (ROOT / ".github" / "workflows" / "run.yml").read_text(encoding="utf-8")
+        contract_section = workflow.split("contract_hash:", 1)[1].split("concurrency:", 1)[0]
+        self.assertIn("required: true", contract_section)
+        self.assertNotIn("default: ''", contract_section)
+        self.assertIn('validate_contract_hash(os.environ.get("CONTRACT_HASH"))', workflow)
+        self.assertNotIn("allow_legacy_empty=True", workflow)
+
 
 if __name__ == "__main__":
     unittest.main()
