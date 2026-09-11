@@ -135,6 +135,8 @@ def main():
             "Render verification failed: audio codec must be aac, got "
             f"{audios[0].get('codec_name')}"
         )
+    if str(audios[0].get("profile", "")).upper() not in {"LC", "AAC LC"}:
+        raise SystemExit("Render verification failed: AAC profile must be LC")
     if int(audios[0].get("sample_rate") or 0) != 48000:
         raise SystemExit("Render verification failed: audio sample rate must be 48000 Hz")
 
