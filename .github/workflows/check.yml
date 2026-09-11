@@ -49,8 +49,19 @@ jobs:
             echo "Exercise PASS"
           else
             stage="$(cat /tmp/runtime-check-stage 2>/dev/null || true)"
+            if [[ "${stage}" == "s02n" ]]; then
+              if grep -q "H.264 profile" /tmp/runtime-exercise.log; then stage="s02n1"
+              elif grep -q "pixel format" /tmp/runtime-exercise.log; then stage="s02n2"
+              elif grep -q "color_space" /tmp/runtime-exercise.log; then stage="s02n3"
+              elif grep -q "color_transfer" /tmp/runtime-exercise.log; then stage="s02n4"
+              elif grep -q "color_primaries" /tmp/runtime-exercise.log; then stage="s02n5"
+              elif grep -q "AAC profile" /tmp/runtime-exercise.log; then stage="s02n6"
+              elif grep -q "audio sample rate" /tmp/runtime-exercise.log; then stage="s02n7"
+              else stage="s02n9"
+              fi
+            fi
             case "${stage}" in
-              s01|s02|s02a|s02b|s02c|s02d|s02e|s02f|s02g|s02h|s02i|s02j|s02k|s02l|s02m|s02n|s02x|s03|s04)
+              s01|s02|s02a|s02b|s02c|s02d|s02e|s02f|s02g|s02h|s02i|s02j|s02k|s02l|s02m|s02n1|s02n2|s02n3|s02n4|s02n5|s02n6|s02n7|s02n9|s02x|s03|s04)
                 ;;
               *) stage="unknown" ;;
             esac
