@@ -1,6 +1,7 @@
 """Safe production-equivalent acceptance with no network publication path."""
 import json
 import os
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -56,6 +57,9 @@ def main():
         try:
             render_seconds, metrics = dry_run.render_smoke(request, root)
         except Exception as exc:
+            if isinstance(exc, subprocess.CalledProcessError):
+                detail = str(exc.stderr or exc.output or "synthetic command failed")[-500:]
+                print(f"::error::E_VERIFY_001 synthetic-check detail={detail}")
             message = str(exc).lower()
             if "identity resource" in message or "font" in message or "emoji" in message:
                 phase("s02a")
