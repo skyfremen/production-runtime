@@ -8,8 +8,10 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 RUN = ROOT / ".github/workflows/run.yml"
-CHECK = ROOT / ".github/workflows/check.yml"
+DRY_RUN = ROOT / ".github/workflows/dry-run.yml"
+OBSERVE = ROOT / ".github/workflows/observe.yml"
 SINGLE = ROOT / ".github/workflows/single.yml"
+BASE = ROOT / ".github/workflows/base.yml"
 
 
 class BoundaryTests(unittest.TestCase):
@@ -50,14 +52,13 @@ class BoundaryTests(unittest.TestCase):
                     ref = line.split("@", 1)[-1].split()[0]
                     self.assertRegex(ref, r"^[0-9a-f]{40}$")
 
-    def test_check_mode_remains_secret_free_and_observe_is_minimal(self):
-        text = CHECK.read_text()
-        check_block = text.split("  check:\n", 1)[1].split("\n  observe:\n", 1)[0]
-        observe_block = text.split("\n  observe:\n", 1)[1]
+    def test_dry_run_is_secret_free_and_observe_is_minimal(self):
+        dry = DRY_RUN.read_text()
+        observe = OBSERVE.read_text()
 
-        self.assertNotIn("environment:", check_block)
-        check_refs = set(re.findall(r"secrets\.([A-Z0-9_]+)", check_block))
-        self.assertEqual(check_refs, {"GITHUB_TOKEN"})
+        self.assertNotIn("environment:", dry)
+        dry_refs = set(re.findall(r"secrets\.([A-Z0-9_]+)", dry))
+        self.assertEqual(dry_refs, {"GITHUB_TOKEN"})
         for forbidden in (
             "PRIVATE_STATE_TOKEN",
             "PRIVATE_STATE_REPOSITORY",
@@ -66,10 +67,10 @@ class BoundaryTests(unittest.TestCase):
             "YOUTUBE_REFRESH_TOKEN",
             "PEXELS_API_KEY",
         ):
-            self.assertNotIn(forbidden, check_block)
+            self.assertNotIn(forbidden, dry)
 
-        self.assertIn("environment: exec", observe_block)
-        observe_refs = set(re.findall(r"secrets\.([A-Z0-9_]+)", observe_block))
+        self.assertIn("environment: exec", observe)
+        observe_refs = set(re.findall(r"secrets\.([A-Z0-9_]+)", observe))
         self.assertEqual(
             observe_refs,
             {
@@ -81,7 +82,59 @@ class BoundaryTests(unittest.TestCase):
                 "YOUTUBE_REFRESH_TOKEN",
             },
         )
-        self.assertNotIn("PEXELS_API_KEY", observe_block)
+        self.assertNotIn("PEXELS_API_KEY", observe)
+        self.assertIn("python runtime/observe.py", observe)
+        self.assertIn("python runtime/state_sink.py", observe)
+        for forbidden in ("unittest", "runtime/exercise.py", "runtime/core.py"):
+            self.assertNotIn(forbidden, observe)
+
+    def test_workflow_surface_and_trigger_roles_are_fail_closed(self):
+        workflows = ROOT / ".github/workflows"
+        required = {"base.yml", "dry-run.yml", "observe.yml", "run.yml", "single.yml"}
+        actual = {path.name for path in workflows.glob("*.yml")}
+        self.assertTrue(required <= actual, f"E_ARCH_SURFACE missing={sorted(required - actual)}")
+        self.assertFalse({"check.yml"} & actual, "E_ARCH_RETIRED check.yml restored")
+
+        dry = DRY_RUN.read_text()
+        observe = OBSERVE.read_text()
+        run = RUN.read_text()
+        single = SINGLE.read_text()
+        base = BASE.read_text()
+        dry_trigger = dry.split("on:", 1)[1].split("concurrency:", 1)[0]
+        observe_trigger = observe.split("on:", 1)[1].split("concurrency:", 1)[0]
+        self.assertIn("push:", dry_trigger)
+        self.assertIn("workflow_dispatch:", dry_trigger)
+        self.assertNotIn("schedule:", dry_trigger)
+        self.assertIn("cron: '30 5,11,17,23 * * *'", observe_trigger)
+        self.assertIn("workflow_dispatch:", observe_trigger)
+        for workflow in (run, single, base):
+            trigger = workflow.split("on:", 1)[1].split("permissions:", 1)[0]
+            self.assertIn("workflow_dispatch:", trigger)
+            self.assertNotIn("\n  push:", trigger)
+            self.assertNotIn("\n  schedule:", trigger)
+
+    def test_dry_run_has_no_production_side_effect_capability(self):
+        dry = DRY_RUN.read_text()
+        for forbidden in (
+            "runtime/transport.py", "runtime/state_sink.py", "runtime/core.py",
+            "runtime/output/execute.py", "runtime/output/receipt.py",
+            "actions/workflows/run.yml/dispatches", "actions/workflows/single.yml/dispatches",
+            "PRIVATE_STATE_REPOSITORY", "PRIVATE_STATE_TOKEN",
+        ):
+            self.assertNotIn(forbidden, dry)
+        self.assertIn("python -m unittest discover -s tests -v", dry)
+        self.assertIn("python runtime/exercise.py", dry)
+
+    def test_dry_run_permissions_and_container_are_pinned(self):
+        dry = DRY_RUN.read_text()
+        permissions = dry.split("permissions:", 1)[1].split("jobs:", 1)[0]
+        self.assertIn("contents: read", permissions)
+        self.assertIn("packages: read", permissions)
+        for forbidden in ("contents: write", "packages: write", "actions: write"):
+            self.assertNotIn(forbidden, permissions)
+        digest = r"ghcr\.io/skyfremen/runtime-base@sha256:[0-9a-f]{64}"
+        for workflow in (DRY_RUN, OBSERVE, RUN, SINGLE):
+            self.assertRegex(workflow.read_text(), digest)
 
     def test_run_uses_generic_public_environment_aliases(self):
         text = RUN.read_text()
@@ -114,7 +167,7 @@ class BoundaryTests(unittest.TestCase):
 
     def test_workflow_display_labels_are_generic(self):
         visible = []
-        for workflow in (RUN, SINGLE, CHECK):
+        for workflow in (RUN, SINGLE, DRY_RUN, OBSERVE):
             for line in workflow.read_text().splitlines():
                 stripped = line.strip()
                 if stripped.startswith("name:") or stripped.startswith("- name:") or "echo \"" in stripped:

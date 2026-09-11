@@ -16,7 +16,7 @@ from output.execute import prepare
 from output.state import GitHubState, RecoveryBlocked, Stored, blob_sha, encoded_json, record_path
 from test_schema import valid_request
 from output.transfer import build_upload_body, execute_upload, find_existing_by_marker
-from output.verify import RETRY_DELAYS, verify_video
+from output.verify import RETRY_DELAYS, VerificationPending, verify_video
 from base.contract import marker_tag
 
 VIDEO_ID = "AbCdEfGh123"
@@ -157,7 +157,7 @@ class VerificationTests(unittest.TestCase):
     def test_read_delay_is_bounded(self):
         request, identity, record, _ = fixture()
         sleep = Mock()
-        with self.assertRaisesRegex(RecoveryBlocked, "bounded"):
+        with self.assertRaisesRegex(VerificationPending, "bounded"):
             verify_video(
                 client_for([[] for _ in RETRY_DELAYS]),
                 request,

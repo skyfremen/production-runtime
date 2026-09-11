@@ -1,0 +1,88 @@
+name: Dry Run
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/**'
+      - 'base/**'
+      - 'runtime/**'
+      - 'tests/**'
+  workflow_dispatch:
+
+concurrency:
+  group: dry-run-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  dry-run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    container:
+      image: ghcr.io/skyfremen/runtime-base@sha256:6ab68475deb3f0c3e531ff2913da283ceb7e682572acdbd1bff14709b07ffdca
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    env:
+      PYTHONPATH: runtime
+      RUNTIME_COMMIT_SHA: ${{ github.sha }}
+    steps:
+      - name: Source
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          import urllib.request
+          url = f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/tarball/{os.environ['GITHUB_SHA']}"
+          urllib.request.urlretrieve(url, "/tmp/runtime-source.tgz")
+          PY
+          tar --extract --gzip --file /tmp/runtime-source.tgz \
+            --strip-components 1 --directory "${GITHUB_WORKSPACE}"
+
+      - name: Compile
+        shell: bash
+        run: |
+          if ! find base runtime tests -type f -name '*.py' -print0 | xargs -0 python -m py_compile; then
+            echo "::error::E_TEST_COMPILE Python compilation failed"
+            exit 1
+          fi
+
+      - name: Test
+        shell: bash
+        run: |
+          if ! python -m unittest discover -s tests -v; then
+            echo "::error::E_TEST_UNIT Runtime unit tests failed"
+            exit 1
+          fi
+
+      - name: Exercise
+        shell: bash
+        run: |
+          if python runtime/exercise.py > /tmp/runtime-exercise.log 2>&1; then
+            echo "Exercise PASS"
+          else
+            stage="$(sed -n '1p' /tmp/runtime-check-stage 2>/dev/null || true)"
+            case "${stage}" in
+              s01|s02|s02a|s02b|s02c|s02d|s02e|s02f|s02g|s02h|s02i|s02j|s02k|s02l|s02m|s02n|s02x|s03|s04)
+                ;;
+              *) stage="unknown" ;;
+            esac
+            echo "::error::E_MEDIA_EXERCISE stage=${stage}"
+            tail -n 80 /tmp/runtime-exercise.log
+            exit 1
+          fi
+
+      - name: Side-effect boundary
+        shell: bash
+        run: |
+          if [ -e /tmp/runtime-public-summary.json ] || \
+             [ -e /tmp/runtime-diagnostic.json ] || \
+             [ -e /tmp/runtime-observation.json ]; then
+            echo "::error::E_ARCH_SIDE_EFFECT Dry run produced a state artifact"
+            exit 1
+          fi
+          echo "Boundary PASS"
