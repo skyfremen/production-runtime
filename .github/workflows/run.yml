@@ -129,7 +129,7 @@ jobs:
 
   aggregate:
     needs: [prepare, units]
-    if: ${{ always() && needs.prepare.result == 'success' }}
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: exec
