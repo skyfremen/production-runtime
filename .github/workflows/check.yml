@@ -48,6 +48,12 @@ jobs:
           if python runtime/exercise.py > /tmp/runtime-exercise.log 2>&1; then
             echo "Exercise PASS"
           else
-            echo "::error::Exercise FAIL"
+            stage="$(cat /tmp/runtime-acceptance-phase 2>/dev/null || true)"
+            case "${stage}" in
+              batch|render|render_asset|render_encode|render_layout|render_metadata|render_AssertionError|render_FileNotFoundError|render_KeyError|render_RuntimeError|render_SystemExit|render_other|tts|alignment)
+                ;;
+              *) stage="unknown" ;;
+            esac
+            echo "::error::E_VERIFY_001 stage=${stage}"
             exit 1
           fi

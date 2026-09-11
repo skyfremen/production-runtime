@@ -541,7 +541,7 @@ def render_smoke(request_path, root):
     subprocess.run(
         [
             os.sys.executable,
-            str(BASE / "rendering" / "verify_render.py"),
+            str(BASE / "transform" / "verify.py"),
             "--request",
             request_path,
         ],

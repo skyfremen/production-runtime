@@ -453,7 +453,7 @@ class ProductionPipeline:
         active = []
         try:
             with ThreadPoolExecutor(
-                max_workers=self.concurrency, thread_name_prefix="short-worker"
+                max_workers=self.concurrency, thread_name_prefix="runtime-worker"
             ) as executor:
                 for index, request in enumerate(requests):
                     try:
@@ -461,8 +461,8 @@ class ProductionPipeline:
                     except Exception as exc:
                         message = str(exc)
                         stage = (
-                            "validation" if "validate_content.py" in message
-                            else "authorization" if "publish.py" in message
+                            "validation" if "guard/schema.py" in message
+                            else "authorization" if "output/execute.py" in message
                             else "prepare"
                         )
                         self.record_failure(request, stage, exc)
