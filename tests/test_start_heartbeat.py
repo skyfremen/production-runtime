@@ -46,6 +46,16 @@ class StartHeartbeatWorkflowTests(unittest.TestCase):
             self.assertLess(start, load)
             self.assertLess(start, execute)
 
+    def test_only_entry_job_emits_started_evidence(self):
+        run = RUN.read_text(encoding="utf-8")
+        single = SINGLE.read_text(encoding="utf-8")
+        self.assertEqual(run.count("name: Start"), 1)
+        self.assertEqual(single.count("name: Start"), 1)
+        units = run.split("  units:\n", 1)[1].split("\n  aggregate:\n", 1)[0]
+        aggregate = run.split("  aggregate:\n", 1)[1]
+        self.assertNotIn("content/recovery/starts", units)
+        self.assertNotIn("content/recovery/starts", aggregate)
+
     def test_start_script_compiles_and_uses_append_only_private_evidence(self):
         for workflow in (RUN, SINGLE):
             text = workflow.read_text(encoding="utf-8")
