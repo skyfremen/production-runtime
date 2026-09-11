@@ -63,6 +63,10 @@ def main():
                     phase("s02j")
                 elif "caption-contrast.png" in command:
                     phase("s02k")
+                elif "transform/verify.py" in command:
+                    phase("s02n")
+                elif "-frames:v 1" in command:
+                    phase("s02m")
                 else:
                     phase("s02l")
                 raise
