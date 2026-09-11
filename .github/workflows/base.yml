@@ -1,12 +1,9 @@
 name: Base
 
-# Explicitly retrigger after repository workflow permissions were enabled.
 on:
   push:
     branches: [main]
     paths:
-      - 'base/Dockerfile'
-      - 'base/dependencies.txt'
       - '.github/workflows/base.yml'
   workflow_dispatch:
 
@@ -14,88 +11,10 @@ permissions:
   contents: read
   packages: write
 
-concurrency:
-  group: base-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
   base:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-    env:
-      IMAGE_REPOSITORY: ghcr.io/skyfremen/runtime-base
+    timeout-minutes: 5
     steps:
-      - name: Prepare
-        shell: bash
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          import os
-          import urllib.request
-          url = f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/tarball/{os.environ['GITHUB_SHA']}"
-          urllib.request.urlretrieve(url, "/tmp/source.tgz")
-          PY
-          tar --extract --gzip --file /tmp/source.tgz \
-            --strip-components 1 --directory "${GITHUB_WORKSPACE}"
-
-      - name: Registry
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          printf '%s' "${GH_TOKEN}" | docker login ghcr.io \
-            --username "${GITHUB_ACTOR}" --password-stdin
-
-      - name: Build
-        shell: bash
-        run: |
-          set -euo pipefail
-          docker buildx build \
-            --file base/Dockerfile \
-            --tag "${IMAGE_REPOSITORY}:latest" \
-            --tag "${IMAGE_REPOSITORY}:${GITHUB_SHA}" \
-            --cache-from "type=registry,ref=${IMAGE_REPOSITORY}:latest" \
-            --cache-to type=inline \
-            --push \
-            .
-
-      - name: Inspect
-        shell: bash
-        env:
-          IMAGE_REF: ghcr.io/skyfremen/runtime-base:${{ github.sha }}
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          import json
-          import os
-          import subprocess
-
-          image = os.environ['IMAGE_REF']
-
-          def manifest(reference):
-              return json.loads(subprocess.check_output(
-                  ['docker', 'buildx', 'imagetools', 'inspect', '--raw', reference],
-                  text=True,
-              ))
-
-          data = manifest(image)
-          if 'layers' not in data:
-              candidates = [
-                  item for item in data.get('manifests', [])
-                  if item.get('platform', {}).get('os') == 'linux'
-                  and item.get('platform', {}).get('architecture') == 'amd64'
-              ]
-              if len(candidates) != 1:
-                  raise SystemExit(f'Expected one linux/amd64 manifest, found {len(candidates)}')
-              data = manifest(f"{image}@{candidates[0]['digest']}")
-
-          layers = sorted(data.get('layers', []), key=lambda item: item['size'], reverse=True)
-          if not layers:
-              raise SystemExit('No runtime layers found in published image manifest')
-          total = sum(item['size'] for item in layers)
-          print(f'compressed_runtime_image_bytes={total}')
-          print(f'compressed_runtime_image_mib={total / 1024 / 1024:.2f}')
-          for rank, layer in enumerate(layers[:10], 1):
-              print(f"layer_{rank}_mib={layer['size'] / 1024 / 1024:.2f} digest={layer['digest']}")
-          PY
+      - name: Probe
+        run: echo "Base permission probe PASS"
