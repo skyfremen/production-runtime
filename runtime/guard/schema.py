@@ -95,10 +95,15 @@ def _validate_publication(publication, errors):
     if not isinstance(publication, dict) or set(publication) != PUBLICATION_KEYS:
         errors.append("publication must contain exactly mode, timezone, publish_at")
         return
-    if publication.get("mode") != "scheduled":
-        errors.append("publication.mode must be scheduled")
+    mode = publication.get("mode")
+    if mode not in {"scheduled", "immediate"}:
+        errors.append("publication.mode must be scheduled or immediate")
     if publication.get("timezone") != CANONICAL_TIMEZONE:
         errors.append(f"publication.timezone must be {CANONICAL_TIMEZONE}")
+    if mode == "immediate":
+        if publication.get("publish_at") is not None:
+            errors.append("publication.publish_at must be null for immediate publication")
+        return
     raw = str(publication.get("publish_at", ""))
     if not raw.endswith("Z"):
         errors.append("publication.publish_at must be an RFC3339 UTC timestamp ending Z")
