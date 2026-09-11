@@ -12,6 +12,10 @@ RETRY_DELAYS = (0, 2, 4, 8, 8, 4, 4, 10, 10, 10)
 FAILURE_CLASSIFICATION = Path("/tmp/runtime-failure-classification.json")
 
 
+class VerificationPending(RuntimeError):
+    """YouTube state is not ready yet, but durable upload evidence remains valid."""
+
+
 def _instant(raw):
     if not raw:
         return None
@@ -157,7 +161,7 @@ def verify_video(youtube, request, identity, evidence, sleep=time.sleep):
             "attempts": attempt,
             "prior_observations": observations,
         }
-    raise RecoveryBlocked(
+    raise VerificationPending(
         f"YouTube verification incomplete after {len(RETRY_DELAYS)} bounded attempts: {last}"
     )
 
