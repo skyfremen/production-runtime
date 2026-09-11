@@ -40,7 +40,9 @@ class ReadinessTests(unittest.TestCase):
     def test_environment_requires_source_key_only_when_sourcing_is_present(self):
         with mock.patch.dict(os.environ, self.required_env(), clear=True):
             with self.assertRaises(readiness.ReadinessError) as caught:
-                readiness.check_environment(self.manifest(["runtime/content/background-sourcing/day.json"]))
+                readiness.check_environment(
+                    self.manifest(["runtime/content/background-sourcing/day.json"])
+                )
         self.assertEqual(caught.exception.code, E_RESOURCE)
         self.assertFalse(caught.exception.retryable)
 
@@ -60,7 +62,10 @@ class ReadinessTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, E_AUTH)
         self.assertFalse(caught.exception.retryable)
 
-    @mock.patch("guard.readiness.authenticated_channel", side_effect=RecoveryBlocked("wrong channel"))
+    @mock.patch(
+        "guard.readiness.authenticated_channel",
+        side_effect=RecoveryBlocked("wrong channel"),
+    )
     @mock.patch("guard.readiness.make_client", return_value=object())
     def test_wrong_remote_identity_is_non_retryable(self, _client, _channel):
         with self.assertRaises(readiness.ReadinessError) as caught:
@@ -76,14 +81,12 @@ class ReadinessTests(unittest.TestCase):
                  mock.patch("guard.readiness.check_runtime_dependencies") as runtime, \
                  mock.patch("guard.readiness.check_filesystem") as filesystem, \
                  mock.patch("guard.readiness.check_registry") as registry, \
-                 mock.patch("guard.readiness.check_private_state") as state, \
                  mock.patch("guard.readiness.check_remote_channel") as remote:
                 readiness.run_readiness(manifest_path)
             environment.assert_called_once()
             runtime.assert_called_once_with()
             filesystem.assert_called_once_with()
             registry.assert_called_once()
-            state.assert_called_once_with()
             remote.assert_called_once_with()
 
     def test_diagnostic_marks_failure_before_expensive_execution(self):
@@ -99,10 +102,12 @@ class ReadinessTests(unittest.TestCase):
         self.assertFalse(payload["execution_started"])
         self.assertFalse(payload["verification_completed"])
 
-    def test_readiness_has_no_upload_insert_path(self):
+    def test_readiness_has_no_upload_or_fresh_upload_authorization_path(self):
         source = Path(readiness.__file__).read_text(encoding="utf-8")
         self.assertNotIn("videos().insert", source)
         self.assertNotIn("execute_upload", source)
+        self.assertNotIn("require_index_ready", source)
+        self.assertNotIn("authorize_fresh_upload", source)
 
     def test_workflow_ordering_keeps_global_gate_before_fanout_and_execute(self):
         repo = Path(__file__).resolve().parents[1]
