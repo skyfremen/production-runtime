@@ -6,6 +6,7 @@ on:
       batch_id: {description: Opaque identifier, required: true, type: string}
       source_sha: {description: Exact source revision, required: true, type: string}
       contract_hash: {description: Compatibility fingerprint, required: true, type: string}
+      dispatch_id: {description: Correlation identifier, required: true, type: string}
 
 concurrency:
   group: run-${{ inputs.batch_id }}
@@ -34,6 +35,139 @@ jobs:
       RUNTIME_AUTH_C: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
       RUNTIME_COMMIT_SHA: ${{ github.sha }}
     steps:
+      - name: Start
+        shell: bash
+        env:
+          START_BATCH_ID: ${{ inputs.batch_id }}
+          START_SOURCE_SHA: ${{ inputs.source_sha }}
+          START_CONTRACT_HASH: ${{ inputs.contract_hash }}
+          START_DISPATCH_ID: ${{ inputs.dispatch_id }}
+        run: |
+          python - <<'PY'
+          import base64
+          import hashlib
+          import json
+          import os
+          import re
+          import time
+          from datetime import datetime, timezone
+          from urllib.error import HTTPError, URLError
+          from urllib.parse import quote
+          from urllib.request import Request, urlopen
+
+          batch_id = os.environ['START_BATCH_ID']
+          source_sha = os.environ['START_SOURCE_SHA']
+          contract_hash = os.environ['START_CONTRACT_HASH']
+          dispatch_id = os.environ['START_DISPATCH_ID']
+          repository = os.environ['PRIVATE_STATE_REPOSITORY']
+          token = os.environ['PRIVATE_STATE_TOKEN']
+          run_id = os.environ.get('GITHUB_RUN_ID', '')
+          run_attempt = os.environ.get('GITHUB_RUN_ATTEMPT', '')
+          runtime_sha = os.environ.get('RUNTIME_COMMIT_SHA', '')
+
+          if not re.fullmatch(r'[br]_[0-9a-f]{30}', batch_id):
+              raise SystemExit('E_START_001')
+          if not re.fullmatch(r'[0-9a-f]{40}', source_sha):
+              raise SystemExit('E_START_001')
+          if not re.fullmatch(r'[0-9a-f]{64}', contract_hash):
+              raise SystemExit('E_START_001')
+          if not re.fullmatch(r'd_[0-9a-f]{24}', dispatch_id):
+              raise SystemExit('E_START_001')
+          if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository):
+              raise SystemExit('E_START_001')
+          if not run_id.isdigit() or not run_attempt.isdigit() or not re.fullmatch(r'[0-9a-f]{40}', runtime_sha):
+              raise SystemExit('E_START_001')
+
+          def api(endpoint, method='GET', body=None):
+              url = f'https://api.github.com/repos/{repository}/{endpoint}'
+              data = None if body is None else json.dumps(body).encode()
+              request = Request(url, data=data, method=method, headers={
+                  'Authorization': f'Bearer {token}',
+                  'Accept': 'application/vnd.github+json',
+                  'X-GitHub-Api-Version': '2022-11-28',
+                  'Content-Type': 'application/json',
+              })
+              with urlopen(request, timeout=45) as response:
+                  return json.load(response)
+
+          def read(path):
+              result = api(f'contents/{quote(path, safe="/")}?ref=main')
+              raw = base64.b64decode(''.join(str(result['content']).split()), validate=True)
+              blob = hashlib.sha1(f'blob {len(raw)}'.encode() + b'\x00' + raw).hexdigest()
+              if result.get('type') != 'file' or result.get('encoding') != 'base64' or result.get('sha') != blob:
+                  raise ValueError('invalid private state')
+              return raw
+
+          intent_path = f'youtube-shorts-bot/content/recovery/dispatch-intents/{batch_id}/{dispatch_id}.json'
+          try:
+              intent = json.loads(read(intent_path))
+          except (HTTPError, URLError, TimeoutError, ValueError, KeyError, json.JSONDecodeError):
+              raise SystemExit('E_START_001') from None
+
+          expected = {
+              'schema_version': 1,
+              'state': 'prepared',
+              'batch_id': batch_id,
+              'dispatch_id': dispatch_id,
+              'source_sha': source_sha,
+              'contract_hash': contract_hash,
+          }
+          if any(intent.get(key) != value for key, value in expected.items()):
+              raise SystemExit('E_START_001')
+
+          payload = {
+              'schema_version': 1,
+              'state': 'started',
+              'batch_id': batch_id,
+              'dispatch_id': dispatch_id,
+              'source_sha': source_sha,
+              'contract_hash': contract_hash,
+              'runtime_commit_sha': runtime_sha,
+              'workflow_run_id': run_id,
+              'workflow_run_attempt': run_attempt,
+              'started_at': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
+          }
+          raw = (json.dumps(payload, indent=2, sort_keys=True) + '\n').encode()
+          path = f'youtube-shorts-bot/content/recovery/starts/{batch_id}/{dispatch_id}/{run_id}-{run_attempt}.json'
+          encoded = quote(path, safe='/')
+
+          for attempt in range(4):
+              try:
+                  existing = read(path)
+              except HTTPError as exc:
+                  if exc.code != 404:
+                      raise SystemExit('E_START_001') from None
+                  existing = None
+              except (URLError, TimeoutError, ValueError, KeyError):
+                  existing = None
+              if existing is not None:
+                  if existing != raw:
+                      raise SystemExit('E_START_001')
+                  print('Start PASS')
+                  raise SystemExit(0)
+              try:
+                  api(f'contents/{encoded}', 'PUT', {
+                      'branch': 'main',
+                      'message': 'record opaque runtime start',
+                      'content': base64.b64encode(raw).decode(),
+                  })
+                  print('Start PASS')
+                  raise SystemExit(0)
+              except SystemExit:
+                  raise
+              except (HTTPError, URLError, TimeoutError):
+                  try:
+                      existing = read(path)
+                  except Exception:
+                      existing = None
+                  if existing == raw:
+                      print('Start PASS')
+                      raise SystemExit(0)
+                  if attempt < 3:
+                      time.sleep(0.25 * (2 ** attempt))
+
+          raise SystemExit('E_START_001')
+          PY
       - name: Source
         shell: bash
         run: |
