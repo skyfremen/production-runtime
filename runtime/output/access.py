@@ -11,7 +11,11 @@ import socket
 from output.state import RecoveryBlocked
 from output.transfer import authenticated_channel, make_client
 
-REQUIRED = ("YOUTUBE_CLIENT_ID", "YOUTUBE_CLIENT_SECRET", "YOUTUBE_REFRESH_TOKEN")
+REQUIRED = (
+    ("RUNTIME_AUTH_A", "YOUTUBE_CLIENT_ID"),
+    ("RUNTIME_AUTH_B", "YOUTUBE_CLIENT_SECRET"),
+    ("RUNTIME_AUTH_C", "YOUTUBE_REFRESH_TOKEN"),
+)
 
 
 def _http_detail(exc):
@@ -32,7 +36,11 @@ def _http_detail(exc):
 
 
 def run_preflight():
-    missing = [name for name in REQUIRED if not str(os.environ.get(name, "")).strip()]
+    missing = [
+        primary
+        for primary, legacy in REQUIRED
+        if not str(os.environ.get(primary) or os.environ.get(legacy) or "").strip()
+    ]
     if missing:
         raise SystemExit("YouTube credential preflight failed: missing " + ", ".join(missing))
 
@@ -65,4 +73,3 @@ def run_preflight():
 
 if __name__ == "__main__":
     run_preflight()
-

@@ -59,6 +59,35 @@ class BoundaryTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, text)
 
+    def test_run_uses_generic_public_environment_aliases(self):
+        text = RUN.read_text()
+        for secret in (
+            "YOUTUBE_CLIENT_ID",
+            "YOUTUBE_CLIENT_SECRET",
+            "YOUTUBE_REFRESH_TOKEN",
+            "PEXELS_API_KEY",
+        ):
+            self.assertIn(f"secrets.{secret}", text)
+        for alias in (
+            "RUNTIME_AUTH_A",
+            "RUNTIME_AUTH_B",
+            "RUNTIME_AUTH_C",
+            "RUNTIME_SOURCE_KEY",
+        ):
+            self.assertIn(f"{alias}:", text)
+        for public_log_key in (
+            "YOUTUBE_CLIENT_ID:",
+            "YOUTUBE_CLIENT_SECRET:",
+            "YOUTUBE_REFRESH_TOKEN:",
+            "PEXELS_API_KEY:",
+            "VIDEO_WIDTH:",
+            "VIDEO_HEIGHT:",
+            "VIDEO_FPS:",
+            "STORY_TEST_MODE:",
+            "SHORTS_CONCURRENCY:",
+        ):
+            self.assertNotIn(public_log_key, text)
+
     def test_workflow_display_labels_are_generic(self):
         visible = []
         for workflow in (RUN, CHECK):

@@ -102,13 +102,20 @@ def make_client():
 
     credentials = Credentials(
         token=None,
-        refresh_token=os.environ["YOUTUBE_REFRESH_TOKEN"],
+        refresh_token=_credential("RUNTIME_AUTH_C", "YOUTUBE_REFRESH_TOKEN"),
         token_uri="https://oauth2.googleapis.com/token",
-        client_id=os.environ["YOUTUBE_CLIENT_ID"],
-        client_secret=os.environ["YOUTUBE_CLIENT_SECRET"],
+        client_id=_credential("RUNTIME_AUTH_A", "YOUTUBE_CLIENT_ID"),
+        client_secret=_credential("RUNTIME_AUTH_B", "YOUTUBE_CLIENT_SECRET"),
         scopes=YOUTUBE_SCOPES,
     )
     return build("youtube", "v3", credentials=credentials, cache_discovery=False)
+
+
+def _credential(primary, legacy):
+    value = os.environ.get(primary) or os.environ.get(legacy)
+    if not value:
+        raise KeyError(primary)
+    return value
 
 
 def authenticated_channel(youtube):
@@ -297,4 +304,3 @@ def execute_upload(
     }
     atomic_write_json(OUTPUT_DIR / "upload-evidence.json", payload)
     return state.create(record_path(identity["content_id"], "upload"), payload), False
-

@@ -30,7 +30,7 @@ class YouTubeReadinessPreflightTests(unittest.TestCase):
     def test_missing_credentials_fail_before_client_or_network(self):
         with patch.dict(os.environ, {}, clear=True), \
              patch("output.access.make_client") as make_client:
-            with self.assertRaisesRegex(SystemExit, "missing YOUTUBE_CLIENT_ID"):
+            with self.assertRaisesRegex(SystemExit, "missing RUNTIME_AUTH_A"):
                 auth_preflight.run_preflight()
         make_client.assert_not_called()
 

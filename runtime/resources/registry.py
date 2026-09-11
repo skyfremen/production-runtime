@@ -39,7 +39,7 @@ def now():
 
 
 def api_key():
-    value = os.getenv("PEXELS_API_KEY", "").strip()
+    value = (os.getenv("RUNTIME_SOURCE_KEY") or os.getenv("PEXELS_API_KEY", "")).strip()
     if not value:
         raise RuntimeError("PEXELS_API_KEY is required for Pexels cache ingestion")
     return value
