@@ -17,6 +17,9 @@ END_TAIL_SECONDS = 0.35
 PRODUCTION_ENCODE_SAFETY_SECONDS = 0.10
 YOUTUBE_TAG_MAX_CHARS = 30
 EXPECTED_YOUTUBE_CHANNEL_ID = "UCvrq2m9G4yrwPfL_X-QPzMA"
+DEFAULT_VIDEO_WIDTH = 1080
+DEFAULT_VIDEO_HEIGHT = 1920
+DEFAULT_VIDEO_FPS = 30
 
 
 def load_json(path):
@@ -59,7 +62,6 @@ def request_path_for_id(content_id):
     return REQUESTS_DIR / f"{content_id}.json"
 
 
-
 def ensure_request_path_matches(path, data):
     path = Path(path)
     content_id = request_content_id(data)
@@ -79,7 +81,7 @@ def env_bool(name, default=False):
 
 def expected_video_config():
     return {
-        "width": int(os.getenv("VIDEO_WIDTH", "1080")),
-        "height": int(os.getenv("VIDEO_HEIGHT", "1920")),
-        "fps": int(os.getenv("VIDEO_FPS", "30")),
+        "width": int(os.getenv("VIDEO_WIDTH", str(DEFAULT_VIDEO_WIDTH))),
+        "height": int(os.getenv("VIDEO_HEIGHT", str(DEFAULT_VIDEO_HEIGHT))),
+        "fps": int(os.getenv("VIDEO_FPS", str(DEFAULT_VIDEO_FPS))),
     }
