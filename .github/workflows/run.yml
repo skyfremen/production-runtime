@@ -36,6 +36,9 @@ jobs:
       PRIVATE_STATE_TOKEN: ${{ secrets.PRIVATE_STATE_TOKEN }}
       PRIVATE_STATE_REPOSITORY: ${{ secrets.PRIVATE_STATE_REPOSITORY }}
       RUNTIME_SOURCE_KEY: ${{ secrets.PEXELS_API_KEY }}
+      RUNTIME_AUTH_A: ${{ secrets.YOUTUBE_CLIENT_ID }}
+      RUNTIME_AUTH_B: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+      RUNTIME_AUTH_C: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
       RUNTIME_COMMIT_SHA: ${{ github.sha }}
     steps:
       - &start_step
@@ -197,6 +200,16 @@ jobs:
       - name: Shared preparation
         id: shared
         run: python runtime/core.py --manifest /tmp/runtime-batch.json --prepare-shared
+      - name: Readiness
+        run: python runtime/guard/readiness.py --manifest /tmp/runtime-batch.json
+      - name: Record readiness failure
+        if: ${{ failure() }}
+        shell: bash
+        run: |
+          if [ -f /tmp/runtime-batch.json ] && [ -f /tmp/runtime-diagnostic.json ]; then
+            python runtime/transport.py diagnose --manifest /tmp/runtime-batch.json \
+              --diagnostic /tmp/runtime-diagnostic.json
+          fi
       - name: Plan
         id: plan
         run: >-
