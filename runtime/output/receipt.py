@@ -14,21 +14,57 @@ from output.state import (
 )
 from base.contract import OUTPUT_DIR, atomic_write_json, ensure_request_path_matches, load_json
 
-ALLOWED_VERIFICATION_STATES = {"verified_scheduled", "verified_scheduled_published"}
+ALLOWED_VERIFICATION_STATES = {
+    "verified_scheduled",
+    "verified_scheduled_published",
+    "verified_immediate_public",
+}
 
 
-def _scheduled_publish_at(request, evidence):
+def _publication_contract(request, evidence, verification):
     publication = request.get("publication")
-    if not isinstance(publication, dict) or publication.get("mode") != "scheduled":
-        raise RecoveryBlocked("Scheduled immutable publication contract is required")
-    publish_at = publication.get("publish_at")
-    if not publish_at:
-        raise RecoveryBlocked("Scheduled publish_at is required")
-    if evidence.get("upload_body", {}).get("status", {}).get("publishAt") != publish_at:
-        raise RecoveryBlocked(
-            "Durable upload evidence differs from immutable scheduled publication"
-        )
-    return publish_at
+    if not isinstance(publication, dict):
+        raise RecoveryBlocked("Immutable publication contract is required")
+    mode = publication.get("mode")
+    status = evidence.get("upload_body", {}).get("status", {})
+    if mode == "scheduled":
+        publish_at = publication.get("publish_at")
+        if not publish_at:
+            raise RecoveryBlocked("Scheduled publish_at is required")
+        if status.get("privacyStatus") != "private" or status.get("publishAt") != publish_at:
+            raise RecoveryBlocked(
+                "Durable upload evidence differs from immutable scheduled publication"
+            )
+        if verification.get("state") not in {
+            "verified_scheduled",
+            "verified_scheduled_published",
+        }:
+            raise RecoveryBlocked("Scheduled request has incompatible verification state")
+        if verification.get("publish_at") != publish_at:
+            raise RecoveryBlocked(
+                "Cannot finalize: verified scheduled publication differs from immutable request"
+            )
+        if verification.get("privacy_status") not in {"private", "public"}:
+            raise RecoveryBlocked("Cannot finalize: scheduled video has unexpected privacy state")
+        return mode, publish_at
+    if mode == "immediate":
+        if publication.get("publish_at") is not None:
+            raise RecoveryBlocked("Immediate publication requires publish_at=null")
+        if status.get("privacyStatus") != "public" or "publishAt" in status:
+            raise RecoveryBlocked(
+                "Durable upload evidence differs from immutable immediate-public publication"
+            )
+        if verification.get("state") != "verified_immediate_public":
+            raise RecoveryBlocked("Immediate request has incompatible verification state")
+        if verification.get("privacy_status") != "public":
+            raise RecoveryBlocked("Immediate video is not verified public")
+        if verification.get("publish_at_absent") is not True:
+            raise RecoveryBlocked("Immediate video unexpectedly exposes publishAt")
+        publish_at = verification.get("publish_at")
+        if not publish_at:
+            raise RecoveryBlocked("Immediate video requires verified YouTube publishedAt")
+        return mode, publish_at
+    raise RecoveryBlocked("Unsupported immutable publication mode")
 
 
 def build_receipt(request_path, request, upload, selection, render_meta):
@@ -51,21 +87,17 @@ def build_receipt(request_path, request, upload, selection, render_meta):
     check_identity(verification, identity)
     evidence = upload.get("upload_evidence", {})
     check_identity(evidence, identity)
-    publish_at = _scheduled_publish_at(request, evidence)
 
     if (
         verification.get("passed") is not True
         or verification.get("state") not in ALLOWED_VERIFICATION_STATES
     ):
         raise RecoveryBlocked(
-            "Cannot finalize without successful scheduled YouTube verification"
+            "Cannot finalize without successful YouTube verification"
         )
-    if verification.get("publish_at") != publish_at:
-        raise RecoveryBlocked(
-            "Cannot finalize: verified scheduled publication differs from immutable request"
-        )
-    if verification.get("privacy_status") not in {"private", "public"}:
-        raise RecoveryBlocked("Cannot finalize: scheduled video has unexpected privacy state")
+    publication_mode, publish_at = _publication_contract(
+        request, evidence, verification
+    )
     if (
         verification.get("youtube_video_id") != upload.get("youtube_video_id")
         or evidence.get("youtube_video_id") != upload.get("youtube_video_id")
@@ -137,7 +169,7 @@ def build_receipt(request_path, request, upload, selection, render_meta):
         "youtube_video_id": upload["youtube_video_id"],
         "youtube_url": upload["youtube_url"],
         "youtube_channel_id": verification["channel_id"],
-        "publication_mode": "scheduled",
+        "publication_mode": publication_mode,
         "privacy_status": verification["privacy_status"],
         "publish_at": publish_at,
         "publish_at_absent": verification["publish_at_absent"],
