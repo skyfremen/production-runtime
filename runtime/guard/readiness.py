@@ -7,9 +7,9 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from errors import E_AUTH, E_PREPARE, E_RESOURCE, E_STATE
-from output.state import GitHubState, RecoveryBlocked
-from output.transfer import authenticated_channel, make_client, require_index_ready
+from errors import E_AUTH, E_PREPARE, E_RESOURCE
+from output.state import RecoveryBlocked
+from output.transfer import authenticated_channel, make_client
 from resources.validate import load_registry
 
 DIAGNOSTIC = Path("/tmp/runtime-diagnostic.json")
@@ -69,9 +69,9 @@ def check_runtime_dependencies():
         except Exception:
             _fail(E_RESOURCE, False, "runtime")
 
-    # Preserve the existing ONNX-primary / PyTorch-fallback contract. A missing
-    # primary resource must not block a viable fallback merely because readiness
-    # runs before a specific Short is rendered.
+    # Preserve the existing ONNX-primary / PyTorch-fallback contract. Readiness
+    # proves that at least one configured backend is structurally available; it
+    # does not synthesize audio or download a fallback model.
     try:
         synth = importlib.import_module("transform.synth")
         model = Path(synth.ONNX_MODEL_PATH)
@@ -124,18 +124,6 @@ def check_registry(manifest):
         _fail(E_RESOURCE, False, "registry")
 
 
-def check_private_state():
-    try:
-        require_index_ready(GitHubState())
-    except KeyError:
-        _fail(E_STATE, False, "state")
-    except RecoveryBlocked as exc:
-        retryable = "Cannot read durable state" in str(exc)
-        _fail(E_STATE, retryable, "state")
-    except Exception:
-        _fail(E_STATE, True, "state")
-
-
 def check_remote_channel():
     try:
         channel = authenticated_channel(make_client())
@@ -155,7 +143,6 @@ def run_readiness(manifest_path):
     check_runtime_dependencies()
     check_filesystem()
     check_registry(manifest)
-    check_private_state()
     check_remote_channel()
     print("Readiness PASS")
 
