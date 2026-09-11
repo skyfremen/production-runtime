@@ -97,7 +97,7 @@ jobs:
           def read(path):
               result = api(f'contents/{quote(path, safe="/")}?ref=main')
               raw = base64.b64decode(''.join(str(result['content']).split()), validate=True)
-              blob = hashlib.sha1(f'blob {len(raw)}\\0'.encode() + raw).hexdigest()
+              blob = hashlib.sha1(f'blob {len(raw)}'.encode() + b'\x00' + raw).hexdigest()
               if result.get('type') != 'file' or result.get('encoding') != 'base64' or result.get('sha') != blob:
                   raise ValueError('invalid private state')
               return raw
