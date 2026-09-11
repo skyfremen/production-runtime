@@ -50,7 +50,7 @@ jobs:
           else
             stage="$(cat /tmp/runtime-check-stage 2>/dev/null || true)"
             case "${stage}" in
-              s01|s02|s02a|s02b|s02c|s02d|s02e|s02f|s02g|s02h|s02i|s02j|s02k|s02l|s02x|s03|s04)
+              s01|s02|s02a|s02b|s02c|s02d|s02e|s02f|s02g|s02h|s02i|s02j|s02k|s02l|s02m|s02n|s02x|s03|s04)
                 ;;
               *) stage="unknown" ;;
             esac
