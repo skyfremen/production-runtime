@@ -20,36 +20,51 @@ concurrency:
 jobs:
   base:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      IMAGE_REPOSITORY: ghcr.io/skyfremen/runtime-base
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Prepare
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          import urllib.request
+          url = f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/tarball/{os.environ['GITHUB_SHA']}"
+          urllib.request.urlretrieve(url, "/tmp/source.tgz")
+          PY
+          tar --extract --gzip --file /tmp/source.tgz \
+            --strip-components 1 --directory "${GITHUB_WORKSPACE}"
 
       - name: Registry
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Builder
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          printf '%s' "${GH_TOKEN}" | docker login ghcr.io \
+            --username "${GITHUB_ACTOR}" --password-stdin
 
       - name: Build
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
-        with:
-          context: .
-          file: base/Dockerfile
-          push: true
-          tags: |
-            ghcr.io/skyfremen/runtime-base:latest
-            ghcr.io/skyfremen/runtime-base:${{ github.sha }}
-          cache-from: type=registry,ref=ghcr.io/skyfremen/runtime-base:latest
-          cache-to: type=inline
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker buildx build \
+            --file base/Dockerfile \
+            --tag "${IMAGE_REPOSITORY}:latest" \
+            --tag "${IMAGE_REPOSITORY}:${GITHUB_SHA}" \
+            --cache-from "type=registry,ref=${IMAGE_REPOSITORY}:latest" \
+            --cache-to type=inline \
+            --push \
+            .
 
       - name: Inspect
         shell: bash
         env:
           IMAGE_REF: ghcr.io/skyfremen/runtime-base:${{ github.sha }}
         run: |
+          set -euo pipefail
           python - <<'PY'
           import json
           import os
