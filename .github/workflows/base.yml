@@ -1,19 +1,60 @@
 name: Base
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/base.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
+  packages: write
+
+concurrency:
+  group: base-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   base:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 60
+    env:
+      IMAGE_REPOSITORY: ghcr.io/skyfremen/runtime-base
     steps:
-      - name: Probe
-        run: echo "Base read-only probe PASS"
+      - name: Prepare
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          import urllib.request
+          url = f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/tarball/{os.environ['GITHUB_SHA']}"
+          urllib.request.urlretrieve(url, "/tmp/source.tgz")
+          PY
+          tar --extract --gzip --file /tmp/source.tgz \
+            --strip-components 1 --directory "${GITHUB_WORKSPACE}"
+
+      - name: Registry
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          printf '%s' "${GH_TOKEN}" | docker login ghcr.io \
+            --username "${GITHUB_ACTOR}" --password-stdin
+
+      - name: Build
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker buildx build \
+            --file base/Dockerfile \
+            --tag "${IMAGE_REPOSITORY}:latest" \
+            --tag "${IMAGE_REPOSITORY}:${GITHUB_SHA}" \
+            --cache-from "type=registry,ref=${IMAGE_REPOSITORY}:latest" \
+            --cache-to type=inline \
+            --push \
+            .
+
+      - name: Inspect
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker buildx imagetools inspect "${IMAGE_REPOSITORY}:${GITHUB_SHA}"
