@@ -72,8 +72,8 @@ class BoundaryTests(unittest.TestCase):
             self.assertNotIn(forbidden, rendered)
 
     def test_runtime_does_not_target_public_contents(self):
-        state = (ROOT / "runtime/state_transport.py").read_text()
-        recovery = (ROOT / "runtime/publishing/recovery_state.py").read_text()
+        state = (ROOT / "runtime/transport.py").read_text()
+        recovery = (ROOT / "runtime/output/state.py").read_text()
         self.assertIn('os.environ["PRIVATE_STATE_REPOSITORY"]', state)
         self.assertIn('os.environ["PRIVATE_STATE_REPOSITORY"]', recovery)
         self.assertNotIn('os.environ["GITHUB_REPOSITORY"]', recovery)
@@ -81,7 +81,7 @@ class BoundaryTests(unittest.TestCase):
     def test_private_path_allowlist(self):
         import sys
         sys.path.insert(0, str(ROOT / "runtime"))
-        from state_transport import TransportError, safe_private_path
+        from transport import TransportError, safe_private_path
         safe_private_path("youtube-shorts-bot/content/requests/opaque.json")
         safe_private_path("youtube-shorts-bot/media-library/backgrounds.json")
         for path in ("youtube-shorts-bot/analytics/latest.json", "README.md", "../secret"):
@@ -89,11 +89,35 @@ class BoundaryTests(unittest.TestCase):
                 safe_private_path(path)
 
     def test_source_sha_is_used_for_every_input_fetch(self):
-        tree = ast.parse((ROOT / "runtime/state_transport.py").read_text())
+        tree = ast.parse((ROOT / "runtime/transport.py").read_text())
         self.assertTrue(any(isinstance(node, ast.FunctionDef) and node.name == "bootstrap" for node in ast.walk(tree)))
-        source = (ROOT / "runtime/state_transport.py").read_text()
+        source = (ROOT / "runtime/transport.py").read_text()
         self.assertIn("store_file(state, path, source_sha)", source)
         self.assertIn('state.content(path, source_sha)', source)
+
+    def test_public_paths_are_generic(self):
+        paths = [
+            path.relative_to(ROOT).as_posix().lower()
+            for path in ROOT.rglob("*")
+            if path.is_file()
+            and ".git" not in path.relative_to(ROOT).parts
+            and "__pycache__" not in path.relative_to(ROOT).parts
+        ]
+        visible = "\n".join(paths)
+        for forbidden in (
+            "/publishing/", "/rendering/", "/media/", "/planning/",
+            "upload", "youtube", "short", "caption", "story",
+        ):
+            self.assertNotIn(forbidden, visible)
+
+    def test_failure_codes_and_private_diagnostic_path_exist(self):
+        workflow = RUN.read_text()
+        transport = (ROOT / "runtime/transport.py").read_text()
+        core = (ROOT / "runtime/core.py").read_text()
+        self.assertIn("E_EXEC_001", workflow)
+        self.assertIn("E_STATE_001", workflow)
+        self.assertIn("DIAGNOSTIC_PREFIX", transport)
+        self.assertIn("record_failure", core)
 
 
 if __name__ == "__main__":

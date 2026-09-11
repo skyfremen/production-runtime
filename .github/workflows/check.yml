@@ -45,7 +45,7 @@ jobs:
       - name: Exercise
         shell: bash
         run: |
-          if python runtime/acceptance.py > /tmp/runtime-acceptance.log 2>&1; then
+          if python runtime/exercise.py > /tmp/runtime-exercise.log 2>&1; then
             echo "Exercise PASS"
           else
             echo "::error::Exercise FAIL"

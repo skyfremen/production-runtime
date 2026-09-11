@@ -59,7 +59,7 @@ jobs:
 
       - name: Load
         run: >-
-          python runtime/state_transport.py fetch
+          python runtime/transport.py fetch
           --batch-id "${{ inputs.batch_id }}"
           --source-sha "${{ inputs.source_sha }}"
           --output /tmp/runtime-batch.json
@@ -67,29 +67,38 @@ jobs:
       - name: Execute
         id: execute
         continue-on-error: true
-        run: python runtime/runner.py --manifest /tmp/runtime-batch.json --concurrency 2
+        run: python runtime/core.py --manifest /tmp/runtime-batch.json --concurrency 2
 
       - name: Finalize
         id: completion
-        if: ${{ always() && steps.execute.outcome == 'success' }}
+        if: ${{ always() }}
         continue-on-error: true
         shell: bash
         run: |
-          if [ -f /tmp/runtime-public-summary.json ]; then
-            python runtime/state_transport.py complete \
+          if [ "${{ steps.execute.outcome }}" = "success" ] && [ -f /tmp/runtime-public-summary.json ]; then
+            python runtime/transport.py complete \
               --manifest /tmp/runtime-batch.json \
               --summary /tmp/runtime-public-summary.json
+          elif [ -f /tmp/runtime-batch.json ] && [ -f /tmp/runtime-diagnostic.json ]; then
+            python runtime/transport.py diagnose \
+              --manifest /tmp/runtime-batch.json \
+              --diagnostic /tmp/runtime-diagnostic.json
+          else
+            echo "::error::E_STATE_001"
+            exit 1
           fi
 
       - name: Verify
         if: ${{ always() }}
         shell: bash
         run: |
+          failed=0
           if [ "${{ steps.execute.outcome }}" != "success" ]; then
-            echo "::error::Execution failed."
-            exit 1
+            echo "::error::E_EXEC_001"
+            failed=1
           fi
           if [ "${{ steps.completion.outcome }}" != "success" ]; then
-            echo "::error::Finalization failed."
-            exit 1
+            echo "::error::E_STATE_001"
+            failed=1
           fi
+          exit "${failed}"
