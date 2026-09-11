@@ -1,2 +1,0 @@
-"""Wacky Dramas media package."""
-
