@@ -188,6 +188,8 @@ jobs:
         run: >-
           python runtime/transport.py fetch --batch-id "${{ inputs.batch_id }}"
           --source-sha "${{ inputs.source_sha }}" --output /tmp/runtime-batch.json
+      - name: Readiness
+        run: python runtime/guard/readiness.py --manifest /tmp/runtime-batch.json
       - name: Execute
         id: execute
         continue-on-error: true

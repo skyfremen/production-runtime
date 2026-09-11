@@ -197,6 +197,20 @@ jobs:
       - name: Shared preparation
         id: shared
         run: python runtime/core.py --manifest /tmp/runtime-batch.json --prepare-shared
+      - name: Readiness
+        env:
+          RUNTIME_AUTH_A: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          RUNTIME_AUTH_B: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          RUNTIME_AUTH_C: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+        run: python runtime/guard/readiness.py --manifest /tmp/runtime-batch.json
+      - name: Record readiness failure
+        if: ${{ failure() }}
+        shell: bash
+        run: |
+          if [ -f /tmp/runtime-batch.json ] && [ -f /tmp/runtime-diagnostic.json ]; then
+            python runtime/transport.py diagnose --manifest /tmp/runtime-batch.json \
+              --diagnostic /tmp/runtime-diagnostic.json
+          fi
       - name: Plan
         id: plan
         run: >-
