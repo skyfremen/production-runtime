@@ -108,6 +108,36 @@ class ResultReceiptTests(unittest.TestCase):
         self.assertEqual(receipt["audio_stream_count"], 1)
         self.assertNotIn("test_kind", receipt)
 
+    def test_immediate_public_receipt_uses_verified_youtube_published_at(self):
+        published_at = "2099-09-09T15:51:00Z"
+        self.request["publication"] = {
+            "mode": "immediate",
+            "timezone": "Asia/Singapore",
+            "publish_at": None,
+        }
+        self.path.write_text(json.dumps(self.request))
+        request_blob_sha = blob_sha(self.path.read_bytes())
+        self.upload["request_blob_sha"] = request_blob_sha
+        self.upload["upload_evidence"]["request_blob_sha"] = request_blob_sha
+        self.upload["upload_evidence"]["upload_body"]["status"] = {
+            "privacyStatus": "public",
+            "selfDeclaredMadeForKids": False,
+        }
+        self.upload["verification"].update(
+            {
+                "request_blob_sha": request_blob_sha,
+                "state": "verified_immediate_public",
+                "privacy_status": "public",
+                "publish_at": published_at,
+                "publish_at_absent": True,
+            }
+        )
+        receipt = self.build()
+        self.assertEqual(receipt["publication_mode"], "immediate")
+        self.assertEqual(receipt["privacy_status"], "public")
+        self.assertTrue(receipt["publish_at_absent"])
+        self.assertEqual(receipt["publish_at"], published_at)
+
     def test_performance_metrics_are_carried_into_receipt(self):
         self.render.update(
             {
@@ -148,7 +178,7 @@ class ResultReceiptTests(unittest.TestCase):
                 with self.assertRaises(RecoveryBlocked):
                     self.build()
 
-    def test_unscheduled_request_cannot_create_receipt(self):
+    def test_missing_publication_contract_cannot_create_receipt(self):
         self.request.pop("publication")
         self.path.write_text(json.dumps(self.request))
         self.upload["request_blob_sha"] = blob_sha(self.path.read_bytes())
@@ -158,7 +188,7 @@ class ResultReceiptTests(unittest.TestCase):
         self.upload["verification"]["request_blob_sha"] = self.upload[
             "request_blob_sha"
         ]
-        with self.assertRaisesRegex(RecoveryBlocked, "Scheduled"):
+        with self.assertRaisesRegex(RecoveryBlocked, "publication contract"):
             self.build()
 
     def test_unverified_or_changed_render_cannot_create_receipt(self):
