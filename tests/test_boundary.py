@@ -44,11 +44,14 @@ class BoundaryTests(unittest.TestCase):
                     ref = line.split("@", 1)[-1].split()[0]
                     self.assertRegex(ref, r"^[0-9a-f]{40}$")
 
-    def test_check_workflow_has_no_environment_secrets(self):
+    def test_check_mode_remains_secret_free_and_observe_is_minimal(self):
         text = CHECK.read_text()
-        self.assertNotIn("environment:", text)
-        refs = set(re.findall(r"secrets\.([A-Z0-9_]+)", text))
-        self.assertEqual(refs, {"GITHUB_TOKEN"})
+        check_block = text.split("  check:\n", 1)[1].split("\n  observe:\n", 1)[0]
+        observe_block = text.split("\n  observe:\n", 1)[1]
+
+        self.assertNotIn("environment:", check_block)
+        check_refs = set(re.findall(r"secrets\.([A-Z0-9_]+)", check_block))
+        self.assertEqual(check_refs, {"GITHUB_TOKEN"})
         for forbidden in (
             "PRIVATE_STATE_TOKEN",
             "PRIVATE_STATE_REPOSITORY",
@@ -57,7 +60,22 @@ class BoundaryTests(unittest.TestCase):
             "YOUTUBE_REFRESH_TOKEN",
             "PEXELS_API_KEY",
         ):
-            self.assertNotIn(forbidden, text)
+            self.assertNotIn(forbidden, check_block)
+
+        self.assertIn("environment: exec", observe_block)
+        observe_refs = set(re.findall(r"secrets\.([A-Z0-9_]+)", observe_block))
+        self.assertEqual(
+            observe_refs,
+            {
+                "GITHUB_TOKEN",
+                "PRIVATE_STATE_TOKEN",
+                "PRIVATE_STATE_REPOSITORY",
+                "YOUTUBE_CLIENT_ID",
+                "YOUTUBE_CLIENT_SECRET",
+                "YOUTUBE_REFRESH_TOKEN",
+            },
+        )
+        self.assertNotIn("PEXELS_API_KEY", observe_block)
 
     def test_run_uses_generic_public_environment_aliases(self):
         text = RUN.read_text()
