@@ -598,7 +598,9 @@ def main():
         "[bg][shade]overlay=0:0[protected];"
         f"[protected][card]overlay=x=0:y='-{CARD_BOB_AMPLITUDE}*sin(PI*t/2)'[tmp1];"
         "[tmp1][brand]overlay=0:0[tmp2];"
-        f"[tmp2]subtitles='{ass.as_posix()}',{BLACKDETECT_FILTER}[v]"
+        f"[tmp2]subtitles='{ass.as_posix()}',"
+        f"setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709,"
+        f"{BLACKDETECT_FILTER}[v]"
     )
     ffmpeg_command = [
         "ffmpeg", "-y",
