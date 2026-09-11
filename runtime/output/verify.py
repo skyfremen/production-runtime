@@ -31,19 +31,33 @@ def _same_instant(left, right):
     return _instant(left) is not None and _instant(left) == _instant(right)
 
 
-def _expected_publish_at(request, evidence):
+def _expected_publication(request, evidence):
     publication = request.get("publication")
-    if not isinstance(publication, dict) or publication.get("mode") != "scheduled":
-        raise RecoveryBlocked("Scheduled immutable publication contract is required")
+    if not isinstance(publication, dict):
+        raise RecoveryBlocked("Immutable publication contract is required")
+    mode = publication.get("mode")
+    intent_status = evidence.get("upload_body", {}).get("status", {})
+    if mode == "immediate":
+        if publication.get("publish_at") is not None:
+            raise RecoveryBlocked("Immediate immutable publication requires publish_at=null")
+        if intent_status.get("privacyStatus") != "public" or "publishAt" in intent_status:
+            raise RecoveryBlocked(
+                "Durable upload intent does not contain the immutable immediate-public contract"
+            )
+        return {"mode": "immediate", "publish_at": None}
+    if mode != "scheduled":
+        raise RecoveryBlocked("Unsupported immutable publication mode")
     publish_at = str(publication.get("publish_at", ""))
     if _instant(publish_at) is None:
         raise RecoveryBlocked("Invalid immutable scheduled publish_at")
-    intent_publish_at = evidence.get("upload_body", {}).get("status", {}).get("publishAt")
-    if not _same_instant(intent_publish_at, publish_at):
+    intent_publish_at = intent_status.get("publishAt")
+    if intent_status.get("privacyStatus") != "private" or not _same_instant(
+        intent_publish_at, publish_at
+    ):
         raise RecoveryBlocked(
             "Durable upload intent does not contain the immutable scheduled publication time"
         )
-    return publish_at
+    return {"mode": "scheduled", "publish_at": publish_at}
 
 
 def verify_video(youtube, request, identity, evidence, sleep=time.sleep):
@@ -60,7 +74,9 @@ def verify_video(youtube, request, identity, evidence, sleep=time.sleep):
     if channel["id"] != evidence.get("expected_channel_id"):
         raise RecoveryBlocked("Authenticated channel differs from upload evidence")
     expected_snippet = evidence["upload_body"]["snippet"]
-    expected_publish_at = _expected_publish_at(request, evidence)
+    publication = _expected_publication(request, evidence)
+    mode = publication["mode"]
+    expected_publish_at = publication["publish_at"]
     expected_dt = _instant(expected_publish_at)
 
     last = "video not visible"
@@ -111,23 +127,34 @@ def verify_video(youtube, request, identity, evidence, sleep=time.sleep):
             continue
 
         privacy = status.get("privacyStatus")
-        publish_at = status.get("publishAt")
+        remote_publish_at = status.get("publishAt")
         publish_at_absent = "publishAt" not in status
-        if privacy == "private":
-            if not _same_instant(publish_at, expected_publish_at):
+        if mode == "immediate":
+            if privacy != "public":
+                raise RecoveryBlocked("Immediate video is not public after processing")
+            if not publish_at_absent:
+                raise RecoveryBlocked("Immediate public video unexpectedly exposes publishAt")
+            published_at = snippet.get("publishedAt")
+            if _instant(published_at) is None:
+                raise RecoveryBlocked("Immediate public video has no valid publishedAt")
+            verification_state = "verified_immediate_public"
+            verified_publish_at = published_at
+        elif privacy == "private":
+            if not _same_instant(remote_publish_at, expected_publish_at):
                 raise RecoveryBlocked(
                     "YouTube scheduled publication differs from immutable request"
                 )
             verification_state = "verified_scheduled"
             publish_at_absent = False
+            verified_publish_at = expected_publish_at
         elif privacy == "public":
             current = datetime.now(timezone.utc)
             if expected_dt is None or current < expected_dt:
                 raise RecoveryBlocked(
                     "Scheduled video became public before its immutable publication time"
                 )
-            if publish_at is not None and not _same_instant(
-                publish_at, expected_publish_at
+            if remote_publish_at is not None and not _same_instant(
+                remote_publish_at, expected_publish_at
             ):
                 raise RecoveryBlocked(
                     "Published video exposes a different publishAt than requested"
@@ -138,6 +165,7 @@ def verify_video(youtube, request, identity, evidence, sleep=time.sleep):
                     "YouTube publishedAt predates the immutable scheduled time"
                 )
             verification_state = "verified_scheduled_published"
+            verified_publish_at = expected_publish_at
         else:
             raise RecoveryBlocked("Scheduled video has an unexpected privacy state")
 
@@ -152,8 +180,9 @@ def verify_video(youtube, request, identity, evidence, sleep=time.sleep):
             "channel_id": channel["id"],
             "channel_title": channel.get("snippet", {}).get("title"),
             "channel_handle": channel.get("snippet", {}).get("customUrl"),
+            "publication_mode": mode,
             "privacy_status": privacy,
-            "publish_at": expected_publish_at,
+            "publish_at": verified_publish_at,
             "publish_at_absent": publish_at_absent,
             "upload_status": status["uploadStatus"],
             "association_method": "immutable_github_upload_record",
@@ -181,6 +210,7 @@ def main():
     )
     upload.update(
         {
+            "publication_mode": verification["publication_mode"],
             "privacy_status": verification["privacy_status"],
             "publish_at": verification["publish_at"],
             "publish_at_absent": verification["publish_at_absent"],
