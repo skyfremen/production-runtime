@@ -42,6 +42,15 @@ def record_path(content_id, kind):
     return f"youtube-shorts-bot/content/recovery/{content_id}/{kind}.json"
 
 
+def index_path(content_id):
+    validate_content_id(content_id)
+    return f"youtube-shorts-bot/content/recovery/index/{content_id}.json"
+
+
+def index_bootstrap_path():
+    return "youtube-shorts-bot/content/recovery/index/bootstrap.json"
+
+
 def receipt_path(content_id):
     validate_content_id(content_id)
     return f"youtube-shorts-bot/content/results/{content_id}.json"
@@ -79,15 +88,17 @@ class GitHubState:
 
     @staticmethod
     def allowed(path):
+        if path == index_bootstrap_path():
+            return
         match = re.fullmatch(
-            r"youtube-shorts-bot/content/(?:recovery/([^/]+)/(?:intent|upload)|results/([^/]+))\.json",
+            r"youtube-shorts-bot/content/(?:recovery/([^/]+)/(?:intent|upload)|recovery/index/([^/]+)|results/([^/]+))\.json",
             path,
         )
         if not match:
             raise RecoveryBlocked(
-                "State operations are limited to canonical evidence and receipts"
+                "State operations are limited to canonical evidence, mappings and receipts"
             )
-        validate_content_id(match[1] or match[2])
+        validate_content_id(next(value for value in match.groups() if value))
 
     def load(self, path):
         self.allowed(path)
@@ -114,6 +125,7 @@ class GitHubState:
         raw = encoded_json(data)
         result = None
         last_error = None
+        subject = data.get("content_id", "bootstrap")
         for attempt in range(4):
             try:
                 result = self.api(
@@ -121,7 +133,7 @@ class GitHubState:
                     method="PUT",
                     body={
                         "branch": "main",
-                        "message": f"[skip upload] record {Path(path).stem} for {data['content_id']}",
+                        "message": f"[skip upload] record {Path(path).stem} for {subject}",
                         "content": base64.b64encode(raw).decode(),
                     },
                 )
