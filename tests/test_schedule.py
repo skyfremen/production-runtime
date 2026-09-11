@@ -36,6 +36,15 @@ class ScheduledSlotGuardTests(unittest.TestCase):
         request["publication"] = self.request_at(when)["publication"]
         return request
 
+    def immediate_request(self):
+        request = valid_request()
+        request["publication"] = {
+            "mode": "immediate",
+            "timezone": "Asia/Singapore",
+            "publish_at": None,
+        }
+        return request
+
     def test_policy_is_exactly_ten_minutes(self):
         self.assertEqual(SCHEDULE_FRESHNESS_BUFFER_MINUTES, 10)
 
@@ -68,8 +77,20 @@ class ScheduledSlotGuardTests(unittest.TestCase):
         self.assertFalse(result["skip"])
         self.assertIsNone(result["reason"])
 
+    def test_immediate_publication_has_no_schedule_freshness_block(self):
+        result = scheduled_slot_guard(self.immediate_request(), now_utc=self.now)
+        self.assertFalse(result["skip"])
+        self.assertIsNone(result["reason"])
+        self.assertIsNone(result["remaining_seconds"])
+
+    def test_immediate_publication_rejects_publish_at(self):
+        request = self.immediate_request()
+        request["publication"]["publish_at"] = "2026-09-10T01:00:00Z"
+        with self.assertRaisesRegex(RecoveryBlocked, "publish_at=null"):
+            scheduled_slot_guard(request, now_utc=self.now)
+
     def test_missing_publication_is_rejected(self):
-        with self.assertRaisesRegex(RecoveryBlocked, "Scheduled publication contract"):
+        with self.assertRaisesRegex(RecoveryBlocked, "Publication contract"):
             scheduled_slot_guard({}, now_utc=self.now)
 
     def test_skipped_slot_avoids_upload_contract_and_inventory_scan(self):
@@ -87,6 +108,25 @@ class ScheduledSlotGuardTests(unittest.TestCase):
 
     def test_valid_fresh_slot_checks_contract_before_inventory_authorization(self):
         request = self.full_request_at(self.now + timedelta(minutes=11))
+        events = []
+        with (
+            patch(
+                "output.execute.build_upload_body",
+                side_effect=lambda *args, **kwargs: events.append("body") or {},
+            ),
+            patch(
+                "output.execute.authorize_fresh_upload",
+                side_effect=lambda *args, **kwargs: events.append("authorize"),
+            ),
+        ):
+            result = pre_generation_authorization(
+                request, {}, Mock(), Mock(), Mock(), now_utc=self.now
+            )
+        self.assertFalse(result["skip"])
+        self.assertEqual(events, ["body", "authorize"])
+
+    def test_immediate_publication_checks_contract_before_inventory_authorization(self):
+        request = self.immediate_request()
         events = []
         with (
             patch(
