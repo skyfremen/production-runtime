@@ -185,6 +185,20 @@ def order_requests(requests):
     return tuple(path for _slot, path in sorted(scheduled)) + tuple(deferred)
 
 
+def ordered_manifest_requests(manifest):
+    """Validate one fetched manifest and return its canonical stable request order."""
+    requests = manifest.get("requests") or []
+    planning = manifest.get("planning") or []
+    sourcing = manifest.get("sourcing") or []
+    if planning:
+        batch = validate_explicit_batch(requests, planning, sourcing)
+        return order_requests(batch.requests)
+    ordered = order_requests(requests)
+    if not 1 <= len(ordered) <= 24:
+        raise BatchError("Recovery batch size is outside the allowed range")
+    return ordered
+
+
 def write_batch_files(batch, *, request_output, sourcing_output):
     ordered = order_requests(batch.requests)
     Path(request_output).write_text(

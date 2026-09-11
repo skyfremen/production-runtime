@@ -11,9 +11,9 @@ from pathlib import Path
 from errors import E_EXEC, E_VERIFY
 
 from resources.validate import load_registry, validate_request_backgrounds
-from engine.batch import BatchResolution, order_requests, validate_explicit_batch, write_batch_files
-from engine.pipeline import SUMMARY_PATH as PIPELINE_SUMMARY
+from engine.batch import ordered_manifest_requests
 from engine.pipeline import ProductionPipeline
+from engine.shard import select_shard
 
 PUBLIC_SUMMARY = Path("/tmp/runtime-public-summary.json")
 PENDING = Path("/tmp/batch-pending-verification.txt")
@@ -43,41 +43,66 @@ def request_env(base, source_map, request):
     return env
 
 
-def run(manifest_path, concurrency):
+def prepare_manifest(manifest_path, *, ingest_sourcing, persist_registry):
     manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
-    requests = manifest["requests"]
-    if manifest["planning"]:
-        batch = validate_explicit_batch(requests, manifest["planning"], manifest["sourcing"])
-        ordered = write_batch_files(
-            batch,
-            request_output="/tmp/batch-requests.txt",
-            sourcing_output="/tmp/background-sourcing-manifests.txt",
-        )
-    else:
-        ordered = order_requests(requests)
-        if not 1 <= len(ordered) <= 24:
-            raise RunnerError("Recovery batch size is outside the allowed range")
-        Path("/tmp/batch-requests.txt").write_text("\n".join(ordered) + "\n")
-        Path("/tmp/background-sourcing-manifests.txt").write_text("")
+    ordered = ordered_manifest_requests(manifest)
+    Path("/tmp/batch-requests.txt").write_text("\n".join(ordered) + "\n")
+    Path("/tmp/background-sourcing-manifests.txt").write_text(
+        "\n".join(manifest["sourcing"]) + ("\n" if manifest["sourcing"] else "")
+    )
+
+    if ingest_sourcing:
+        for sourcing in manifest["sourcing"]:
+            silent_call([
+                "python", "runtime/resources/registry.py", "ingest-manifest", "--manifest", sourcing,
+            ])
+        if manifest["sourcing"]:
+            silent_call(["python", "runtime/resources/validate.py"])
+        if persist_registry and manifest["sourcing"]:
+            silent_call([
+                "python", "runtime/transport.py", "persist-registry", "--manifest", manifest_path,
+            ])
 
     registry = load_registry(manifest["registry"])
     for request in ordered:
         payload = json.loads(Path(request).read_text(encoding="utf-8"))
         validate_request_backgrounds(payload, registry)
+    return manifest, ordered
+
+
+def prepare_shared(manifest_path):
+    manifest, ordered = prepare_manifest(
+        manifest_path, ingest_sourcing=True, persist_registry=True
+    )
+    output = os.environ.get("GITHUB_OUTPUT")
+    if output:
+        raw = Path(manifest["registry"]).read_bytes()
+        from transport import git_blob_sha
+        with open(output, "a", encoding="utf-8") as target:
+            target.write(f"registry_sha={git_blob_sha(raw)}\n")
+            target.write(f"registry_refresh={int(bool(manifest['sourcing']))}\n")
+    print(f"Prepare PASS: items={len(ordered)}")
+
+
+def run(manifest_path, concurrency, *, profile=None, shard_index=None,
+        persist_registry=True):
+    manifest, ordered = prepare_manifest(
+        manifest_path,
+        ingest_sourcing=persist_registry,
+        persist_registry=persist_registry,
+    )
+    if (profile is None) != (shard_index is None):
+        raise RunnerError("Execution profile and shard index must be supplied together")
+    if profile is not None:
+        ordered = select_shard(ordered, shard_index, profile)
+    if profile == "single" and concurrency != 1:
+        raise RunnerError("Single execution requires concurrency 1")
+    if profile == "paired" and concurrency != 2:
+        raise RunnerError("Paired execution requires concurrency 2")
     print(f"Prepare PASS: items={len(ordered)}")
 
     silent_call(["python", "runtime/output/access.py"])
     print("Load PASS")
-
-    for sourcing in manifest["sourcing"]:
-        silent_call([
-            "python", "runtime/resources/registry.py", "ingest-manifest", "--manifest", sourcing,
-        ])
-    if manifest["sourcing"]:
-        silent_call(["python", "runtime/resources/validate.py"])
-        silent_call([
-            "python", "runtime/transport.py", "persist-registry", "--manifest", manifest_path,
-        ])
 
     base_env = dict(os.environ)
     base_env["REQUEST_SOURCE_MAP_JSON"] = json.dumps(manifest["request_sources"], separators=(",", ":"))
@@ -119,6 +144,8 @@ def run(manifest_path, concurrency):
         "peak_cpu_percent": float(production["peak_cpu_percent"]),
         "peak_memory_percent": float(production["peak_memory_percent"]),
     }
+    if shard_index is not None:
+        summary["shard_index"] = shard_index
     PUBLIC_SUMMARY.write_text(json.dumps(summary, sort_keys=True) + "\n")
     for ordinal, request in enumerate(ordered, 1):
         if request in failed_stages:
@@ -134,8 +161,23 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", default="/tmp/runtime-batch.json")
     parser.add_argument("--concurrency", type=int, choices=(1, 2), default=2)
+    parser.add_argument("--profile", choices=("paired", "single"))
+    parser.add_argument("--shard-index", type=int)
+    parser.add_argument("--no-persist-registry", action="store_true")
+    parser.add_argument("--prepare-shared", action="store_true")
     args = parser.parse_args()
-    run(args.manifest, args.concurrency)
+    if args.prepare_shared:
+        if args.profile is not None or args.shard_index is not None:
+            parser.error("shared preparation does not accept a shard")
+        prepare_shared(args.manifest)
+    else:
+        run(
+            args.manifest,
+            args.concurrency,
+            profile=args.profile,
+            shard_index=args.shard_index,
+            persist_registry=not args.no_persist_registry,
+        )
 
 
 def record_failure(exc):

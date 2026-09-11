@@ -31,9 +31,13 @@ class BoundaryTests(unittest.TestCase):
         self.assertIn("packages: read", permissions)
         self.assertNotIn("write", permissions)
 
-    def test_no_artifact_or_unsafe_shell_logging(self):
+    def test_only_sanitized_result_artifacts_and_no_unsafe_shell_logging(self):
         workflows = "\n".join(path.read_text() for path in (ROOT / ".github/workflows").glob("*.yml"))
-        self.assertNotIn("upload-artifact", workflows)
+        self.assertIn("actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02", workflows)
+        self.assertIn("actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093", workflows)
+        self.assertIn("path: /tmp/runtime-public-summary.json", workflows)
+        for forbidden_path in ("runtime/content", "runtime/output", "/tmp/runtime-batch.json\n          retention"):
+            self.assertNotIn(forbidden_path, workflows)
         for unsafe in ("set -x", "printenv", "curl -v", "cat request", "Authorization:"):
             self.assertNotIn(unsafe, workflows)
 
@@ -165,6 +169,18 @@ class BoundaryTests(unittest.TestCase):
         self.assertIn("E_STATE_001", workflow)
         self.assertIn("DIAGNOSTIC_PREFIX", transport)
         self.assertIn("record_failure", core)
+
+    def test_bounded_matrix_and_single_finalizer(self):
+        workflow = RUN.read_text()
+        self.assertIn("fail-fast: false", workflow)
+        self.assertIn("max-parallel: 12", workflow)
+        self.assertIn("matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}", workflow)
+        self.assertEqual(workflow.count("runtime/transport.py complete"), 1)
+        self.assertEqual(workflow.count("runtime/transport.py diagnose"), 1)
+        units = workflow.split("  units:\n", 1)[1].split("\n  aggregate:\n", 1)[0]
+        self.assertNotIn("transport.py complete", units)
+        self.assertNotIn("transport.py diagnose", units)
+        self.assertIn("--no-persist-registry", units)
 
 
 if __name__ == "__main__":

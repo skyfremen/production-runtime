@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import re
+import time
 from pathlib import Path, PurePosixPath
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
@@ -86,20 +87,34 @@ class PrivateState:
     def create(self, path, payload, message):
         raw = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode()
         encoded = quote(path, safe="/")
-        try:
-            existing, _sha = self.current_content(path)
-        except TransportError:
-            existing = None
-        if existing is not None:
-            if existing != raw:
-                raise TransportError("Immutable private state already differs")
-            return False
-        self.api(f"contents/{encoded}", method="PUT", body={
-            "branch": "main",
-            "message": message,
-            "content": base64.b64encode(raw).decode(),
-        })
-        return True
+        for attempt in range(4):
+            try:
+                existing, _sha = self.current_content(path)
+            except TransportError:
+                existing = None
+            if existing is not None:
+                if existing != raw:
+                    raise TransportError("Immutable private state already differs")
+                return False
+            try:
+                self.api(f"contents/{encoded}", method="PUT", body={
+                    "branch": "main",
+                    "message": message,
+                    "content": base64.b64encode(raw).decode(),
+                })
+                return True
+            except TransportError:
+                try:
+                    existing, _sha = self.current_content(path)
+                except TransportError:
+                    existing = None
+                if existing is not None:
+                    if existing != raw:
+                        raise TransportError("Immutable private state already differs")
+                    return False
+                if attempt < 3:
+                    time.sleep(0.25 * (2 ** attempt))
+        raise TransportError("Immutable private state create was not acknowledged")
 
     def update(self, path, raw, expected_sha, message):
         encoded = quote(path, safe="/")
@@ -233,6 +248,18 @@ def persist_registry(manifest_path):
     print("Finalize PASS")
 
 
+def refresh_registry(manifest_path, expected_blob_sha):
+    """Load the registry snapshot prepared once for all isolated workers."""
+    if not SHA_RE.fullmatch(expected_blob_sha):
+        raise TransportError("Invalid prepared registry identity")
+    manifest = json.loads(Path(manifest_path).read_text())
+    raw, observed_sha = PrivateState().current_content(REGISTRY_PATH)
+    if observed_sha != expected_blob_sha or git_blob_sha(raw) != expected_blob_sha:
+        raise TransportError("Prepared registry snapshot is no longer current")
+    Path(manifest["registry"]).write_bytes(raw)
+    print("Load PASS")
+
+
 def complete(manifest_path, summary_path):
     manifest = json.loads(Path(manifest_path).read_text())
     summary = json.loads(Path(summary_path).read_text())
@@ -299,6 +326,9 @@ def main():
     fetch.add_argument("--output", default="/tmp/runtime-batch.json")
     registry = sub.add_parser("persist-registry")
     registry.add_argument("--manifest", default="/tmp/runtime-batch.json")
+    refresh = sub.add_parser("refresh-registry")
+    refresh.add_argument("--manifest", default="/tmp/runtime-batch.json")
+    refresh.add_argument("--expected-blob-sha", required=True)
     done = sub.add_parser("complete")
     done.add_argument("--manifest", default="/tmp/runtime-batch.json")
     done.add_argument("--summary", default="/tmp/runtime-public-summary.json")
@@ -310,6 +340,8 @@ def main():
         bootstrap(args.batch_id, args.source_sha, args.output)
     elif args.command == "persist-registry":
         persist_registry(args.manifest)
+    elif args.command == "refresh-registry":
+        refresh_registry(args.manifest, args.expected_blob_sha)
     elif args.command == "complete":
         complete(args.manifest, args.summary)
     else:

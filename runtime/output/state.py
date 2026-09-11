@@ -9,6 +9,7 @@ import json
 import os
 import re
 import subprocess
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -111,19 +112,37 @@ class GitHubState:
                 raise RecoveryBlocked(f"Immutable state already exists: {path}")
             return prior
         raw = encoded_json(data)
-        try:
-            result = self.api(
-                f"contents/{path}",
-                method="PUT",
-                body={
-                    "branch": "main",
-                    "message": f"[skip upload] record {Path(path).stem} for {data['content_id']}",
-                    "content": base64.b64encode(raw).decode(),
-                },
-            )
-        except Exception as exc:
+        result = None
+        last_error = None
+        for attempt in range(4):
+            try:
+                result = self.api(
+                    f"contents/{path}",
+                    method="PUT",
+                    body={
+                        "branch": "main",
+                        "message": f"[skip upload] record {Path(path).stem} for {data['content_id']}",
+                        "content": base64.b64encode(raw).decode(),
+                    },
+                )
+                break
+            except HTTPError as exc:
+                last_error = exc
+                if exc.code not in {409, 422}:
+                    break
+                prior = self.load(path)
+                if prior:
+                    if prior.data != data:
+                        raise RecoveryBlocked(f"Immutable state already exists: {path}")
+                    return prior
+                if attempt < 3:
+                    time.sleep(0.25 * (2 ** attempt))
+            except Exception as exc:
+                last_error = exc
+                break
+        if result is None:
             raise RecoveryBlocked(
-                f"Durable write not acknowledged ({type(exc).__name__}); retry recovery only"
+                f"Durable write not acknowledged ({type(last_error).__name__}); retry recovery only"
             ) from None
         if result["content"]["sha"] != blob_sha(raw):
             raise RecoveryBlocked("Durable write returned unexpected evidence SHA")

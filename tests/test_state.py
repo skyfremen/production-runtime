@@ -6,6 +6,7 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import Mock, patch
+from urllib.error import HTTPError
 
 ROOT = Path(__file__).resolve().parents[1]
 BASE = ROOT / "runtime"
@@ -380,6 +381,37 @@ class RecoveryTests(unittest.TestCase):
         with self.assertRaisesRegex(RecoveryBlocked, "Immutable"):
             state.create(record_path(self.identity["content_id"], "upload"), changed)
         state.api.assert_not_called()
+
+    def test_github_state_retries_distinct_path_branch_conflict(self):
+        state = object.__new__(GitHubState)
+        state.load = Mock(side_effect=[None, None])
+        raw = encoded_json(self.record)
+        acknowledged = {
+            "content": {"sha": blob_sha(raw)},
+            "commit": {"sha": "b" * 40},
+        }
+        state.api = Mock(side_effect=[
+            HTTPError("https://example.invalid", 409, "conflict", {}, None),
+            acknowledged,
+        ])
+        with patch("output.state.time.sleep"):
+            stored = state.create(
+                record_path(self.identity["content_id"], "upload"), self.record
+            )
+        self.assertTrue(stored.created)
+        self.assertEqual(state.api.call_count, 2)
+
+    def test_github_state_same_path_race_never_grants_upload_claim(self):
+        state = object.__new__(GitHubState)
+        prior = Stored(self.record, "a" * 40)
+        state.load = Mock(side_effect=[None, prior])
+        state.api = Mock(side_effect=HTTPError(
+            "https://example.invalid", 422, "exists", {}, None
+        ))
+        stored = state.create(
+            record_path(self.identity["content_id"], "upload"), self.record
+        )
+        self.assertFalse(stored.created)
 
     def test_github_state_cannot_write_requests_or_code(self):
         for path in (
