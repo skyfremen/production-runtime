@@ -13,8 +13,7 @@ on:
         type: string
       contract_hash:
         description: Compatibility fingerprint
-        required: false
-        default: ''
+        required: true
         type: string
 
 concurrency:
@@ -63,7 +62,7 @@ jobs:
         run: >-
           python -c
           'import os; from base.compat import validate_contract_hash;
-          validate_contract_hash(os.environ.get("CONTRACT_HASH"), allow_legacy_empty=True)'
+          validate_contract_hash(os.environ.get("CONTRACT_HASH"))'
 
       - name: Load
         run: >-
