@@ -1,5 +1,6 @@
 name: Base
 
+# Explicitly retrigger after repository workflow permissions were enabled.
 on:
   push:
     branches: [main]
