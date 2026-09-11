@@ -1,6 +1,8 @@
 name: Check
 
 on:
+  push:
+    branches: [automatic-recovery-20260911]
   schedule:
     # 01:30 / 07:30 / 13:30 / 19:30 Asia/Singapore (UTC+8)
     - cron: '30 5,11,17,23 * * *'
@@ -21,7 +23,7 @@ permissions:
 
 jobs:
   check:
-    if: github.event_name == 'workflow_dispatch' && inputs.mode != 'observe'
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.mode != 'observe')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     container:
@@ -51,6 +53,7 @@ jobs:
           if python -m unittest discover -s tests > /tmp/runtime-tests.log 2>&1; then
             echo "Check PASS"
           else
+            cat /tmp/runtime-tests.log
             echo "::error::Check FAIL"
             exit 1
           fi
