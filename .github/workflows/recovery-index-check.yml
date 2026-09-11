@@ -1,0 +1,36 @@
+name: Recovery Index Check
+
+on:
+  push:
+    branches: [work/recovery-index-20260912]
+    paths:
+      - 'runtime/output/state.py'
+      - 'runtime/output/transfer.py'
+      - 'tests/test_state.py'
+      - 'tests/test_transfer_recovery.py'
+      - '.github/workflows/recovery-index-check.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PYTHONPATH: runtime:tests
+    steps:
+      - name: Source
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          import urllib.request
+          url = f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/tarball/{os.environ['GITHUB_SHA']}"
+          urllib.request.urlretrieve(url, "/tmp/source.tgz")
+          PY
+          tar --extract --gzip --file /tmp/source.tgz --strip-components 1 --directory "${GITHUB_WORKSPACE}"
+      - name: Recovery tests
+        run: |
+          python -m unittest discover -s tests -p 'test_state.py' -v
+          python -m unittest discover -s tests -p 'test_transfer_recovery.py' -v
