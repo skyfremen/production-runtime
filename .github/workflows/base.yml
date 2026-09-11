@@ -1,0 +1,85 @@
+name: Base
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'base/Dockerfile'
+      - 'base/dependencies.txt'
+      - '.github/workflows/base.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: base-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  base:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Builder
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: base/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/skyfremen/runtime-base:latest
+            ghcr.io/skyfremen/runtime-base:${{ github.sha }}
+          cache-from: type=registry,ref=ghcr.io/skyfremen/runtime-base:latest
+          cache-to: type=inline
+
+      - name: Inspect
+        shell: bash
+        env:
+          IMAGE_REF: ghcr.io/skyfremen/runtime-base:${{ github.sha }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+
+          image = os.environ['IMAGE_REF']
+
+          def manifest(reference):
+              return json.loads(subprocess.check_output(
+                  ['docker', 'buildx', 'imagetools', 'inspect', '--raw', reference],
+                  text=True,
+              ))
+
+          data = manifest(image)
+          if 'layers' not in data:
+              candidates = [
+                  item for item in data.get('manifests', [])
+                  if item.get('platform', {}).get('os') == 'linux'
+                  and item.get('platform', {}).get('architecture') == 'amd64'
+              ]
+              if len(candidates) != 1:
+                  raise SystemExit(f'Expected one linux/amd64 manifest, found {len(candidates)}')
+              data = manifest(f"{image}@{candidates[0]['digest']}")
+
+          layers = sorted(data.get('layers', []), key=lambda item: item['size'], reverse=True)
+          if not layers:
+              raise SystemExit('No runtime layers found in published image manifest')
+          total = sum(item['size'] for item in layers)
+          print(f'compressed_runtime_image_bytes={total}')
+          print(f'compressed_runtime_image_mib={total / 1024 / 1024:.2f}')
+          for rank, layer in enumerate(layers[:10], 1):
+              print(f"layer_{rank}_mib={layer['size'] / 1024 / 1024:.2f} digest={layer['digest']}")
+          PY
