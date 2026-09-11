@@ -11,6 +11,11 @@ on:
         description: Exact source revision
         required: true
         type: string
+      contract_hash:
+        description: Compatibility fingerprint
+        required: false
+        default: ''
+        type: string
 
 concurrency:
   group: run-${{ inputs.batch_id }}
@@ -51,6 +56,14 @@ jobs:
           PY
           tar --extract --gzip --file /tmp/runtime-source.tgz \
             --strip-components 1 --directory "${GITHUB_WORKSPACE}"
+
+      - name: Compatibility
+        env:
+          CONTRACT_HASH: ${{ inputs.contract_hash }}
+        run: >-
+          python -c
+          'import os; from base.compat import validate_contract_hash;
+          validate_contract_hash(os.environ.get("CONTRACT_HASH"), allow_legacy_empty=True)'
 
       - name: Load
         run: >-
