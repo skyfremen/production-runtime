@@ -126,6 +126,22 @@ class RequestSchemaTests(unittest.TestCase):
     def test_valid_request_passes(self):
         self.assertEqual(validate_request_data(valid_request()), [])
 
+    def test_immediate_publication_passes_with_null_publish_at(self):
+        data = valid_request()
+        data["publication"] = {
+            "mode": "immediate",
+            "timezone": "Asia/Singapore",
+            "publish_at": None,
+        }
+        self.assertEqual(validate_request_data(data), [])
+
+    def test_immediate_publication_rejects_non_null_publish_at(self):
+        data = valid_request()
+        data["publication"]["mode"] = "immediate"
+        self.assertTrue(
+            any("must be null" in error for error in validate_request_data(data))
+        )
+
     def test_noncanonical_schema_is_rejected(self):
         data = valid_request()
         data["schema_version"] = 99
@@ -154,9 +170,7 @@ class RequestSchemaTests(unittest.TestCase):
     def test_primary_backup_must_differ(self):
         data = valid_request()
         data["visual"]["background_backup_id"] = data["visual"]["background_primary_id"]
-        self.assertTrue(
-            any("must differ" in error for error in validate_request_data(data))
-        )
+        self.assertTrue(any("must differ" in error for error in validate_request_data(data)))
 
     def test_canonical_voice_mapping(self):
         cases = (
