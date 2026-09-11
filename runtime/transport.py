@@ -10,6 +10,7 @@ import json
 import os
 import re
 import time
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
@@ -20,11 +21,15 @@ REQUEST_PREFIX = "youtube-shorts-bot/content/requests/"
 PLANNING_PREFIX = "youtube-shorts-bot/content/planning/"
 SOURCING_PREFIX = "youtube-shorts-bot/content/background-sourcing/"
 RECOVERY_BATCH_PREFIX = "youtube-shorts-bot/content/recovery/batches/"
+DISPATCH_INTENT_PREFIX = "youtube-shorts-bot/content/recovery/dispatch-intents/"
+START_PREFIX = "youtube-shorts-bot/content/recovery/starts/"
 REGISTRY_PATH = "youtube-shorts-bot/media-library/backgrounds.json"
 COMPLETION_PREFIX = "youtube-shorts-bot/content/completions/"
 DIAGNOSTIC_PREFIX = "youtube-shorts-bot/content/diagnostics/"
 SHA_RE = re.compile(r"[0-9a-f]{40}")
+CONTRACT_RE = re.compile(r"[0-9a-f]{64}")
 BATCH_RE = re.compile(r"[br]_[0-9a-f]{30}")
+DISPATCH_RE = re.compile(r"d_[0-9a-f]{24}")
 
 
 class TransportError(RuntimeError):
@@ -32,11 +37,19 @@ class TransportError(RuntimeError):
 
 
 def failure_code(command):
-    return "E_LOAD_001" if command == "fetch" else "E_FINALIZE_001"
+    if command == "fetch":
+        return "E_LOAD_001"
+    if command == "start":
+        return "E_START_001"
+    return "E_FINALIZE_001"
 
 
 def git_blob_sha(raw):
     return hashlib.sha1(f"blob {len(raw)}\0".encode() + raw).hexdigest()
+
+
+def iso_z(value):
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 class PrivateState:
@@ -203,6 +216,60 @@ def recovery_batch(state, batch_id, source_sha):
     return requests, [], [], sources
 
 
+def record_start(batch_id, source_sha, contract_hash, dispatch_id):
+    if (
+        not BATCH_RE.fullmatch(batch_id)
+        or not SHA_RE.fullmatch(source_sha)
+        or not CONTRACT_RE.fullmatch(contract_hash)
+        or not DISPATCH_RE.fullmatch(dispatch_id)
+    ):
+        raise TransportError("Invalid start identity")
+
+    state = PrivateState()
+    intent_path = f"{DISPATCH_INTENT_PREFIX}{batch_id}/{dispatch_id}.json"
+    try:
+        raw, _sha = state.current_content(intent_path)
+        intent = json.loads(raw)
+    except (TransportError, UnicodeDecodeError, json.JSONDecodeError):
+        raise TransportError("Prepared dispatch evidence is unavailable") from None
+
+    expected = {
+        "schema_version": 1,
+        "state": "prepared",
+        "batch_id": batch_id,
+        "dispatch_id": dispatch_id,
+        "source_sha": source_sha,
+        "contract_hash": contract_hash,
+    }
+    if any(intent.get(key) != value for key, value in expected.items()):
+        raise TransportError("Prepared dispatch evidence does not match execution")
+
+    run_id = os.environ.get("GITHUB_RUN_ID", "")
+    run_attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "")
+    runtime_sha = os.environ.get("RUNTIME_COMMIT_SHA", "")
+    if not run_id.isdigit() or not run_attempt.isdigit() or not SHA_RE.fullmatch(runtime_sha):
+        raise TransportError("Invalid runtime start identity")
+
+    payload = {
+        "schema_version": 1,
+        "state": "started",
+        "batch_id": batch_id,
+        "dispatch_id": dispatch_id,
+        "source_sha": source_sha,
+        "contract_hash": contract_hash,
+        "runtime_commit_sha": runtime_sha,
+        "workflow_run_id": run_id,
+        "workflow_run_attempt": run_attempt,
+        "started_at": iso_z(datetime.now(timezone.utc)),
+    }
+    state.create(
+        f"{START_PREFIX}{batch_id}/{dispatch_id}/{run_id}-{run_attempt}.json",
+        payload,
+        "record opaque runtime start",
+    )
+    print("Start PASS")
+
+
 def bootstrap(batch_id, source_sha, output):
     if not BATCH_RE.fullmatch(batch_id) or not SHA_RE.fullmatch(source_sha):
         raise TransportError("Invalid opaque dispatch contract")
@@ -320,6 +387,11 @@ def diagnose(manifest_path, diagnostic_path):
 def main():
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
+    start = sub.add_parser("start")
+    start.add_argument("--batch-id", required=True)
+    start.add_argument("--source-sha", required=True)
+    start.add_argument("--contract-hash", required=True)
+    start.add_argument("--dispatch-id", required=True)
     fetch = sub.add_parser("fetch")
     fetch.add_argument("--batch-id", required=True)
     fetch.add_argument("--source-sha", required=True)
@@ -336,7 +408,9 @@ def main():
     diagnostic.add_argument("--manifest", default="/tmp/runtime-batch.json")
     diagnostic.add_argument("--diagnostic", default="/tmp/runtime-diagnostic.json")
     args = parser.parse_args()
-    if args.command == "fetch":
+    if args.command == "start":
+        record_start(args.batch_id, args.source_sha, args.contract_hash, args.dispatch_id)
+    elif args.command == "fetch":
         bootstrap(args.batch_id, args.source_sha, args.output)
     elif args.command == "persist-registry":
         persist_registry(args.manifest)
