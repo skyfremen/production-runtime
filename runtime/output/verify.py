@@ -1,12 +1,15 @@
 import argparse
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 from output.state import RecoveryBlocked, check_identity, identity_for, now
 from output.transfer import authenticated_channel, make_client
 from base.contract import OUTPUT_DIR, atomic_write_json, load_json, marker_tag
+from errors import E_VERIFY
 
 RETRY_DELAYS = (0, 2, 4, 8, 8, 4, 4, 10, 10, 10)
+FAILURE_CLASSIFICATION = Path("/tmp/runtime-failure-classification.json")
 
 
 def _instant(raw):
@@ -191,6 +194,24 @@ def main():
     )
 
 
-if __name__ == "__main__":
-    main()
+def guarded_main():
+    try:
+        main()
+    except RecoveryBlocked:
+        atomic_write_json(FAILURE_CLASSIFICATION, {
+            "stage": "verify",
+            "error_code": E_VERIFY,
+            "retryable": False,
+        })
+        raise
+    except Exception:
+        atomic_write_json(FAILURE_CLASSIFICATION, {
+            "stage": "verify",
+            "error_code": E_VERIFY,
+            "retryable": True,
+        })
+        raise
 
+
+if __name__ == "__main__":
+    guarded_main()

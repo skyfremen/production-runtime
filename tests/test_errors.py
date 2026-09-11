@@ -29,6 +29,28 @@ class ErrorModelTests(unittest.TestCase):
         self.assertTrue(payload["execution_started"])
         self.assertFalse(payload["verification_completed"])
 
+    def test_deterministic_verification_failure_is_not_retryable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "diagnostic.json"
+            internal = Path(tmp) / "internal.log"
+            classification = Path(tmp) / "classification.json"
+            classification.write_text(json.dumps({
+                "stage": "verify",
+                "error_code": "E_VERIFY_001",
+                "retryable": False,
+            }), encoding="utf-8")
+            with patch.object(core, "DIAGNOSTIC", target), patch.object(
+                core, "INTERNAL_LOG", internal
+            ), patch.object(core, "FAILURE_CLASSIFICATION", classification):
+                try:
+                    raise core.RunnerError("aggregate")
+                except core.RunnerError as exc:
+                    code = core.record_failure(exc)
+            payload = json.loads(target.read_text(encoding="utf-8"))
+        self.assertEqual(code, "E_VERIFY_001")
+        self.assertEqual(payload["stage"], "verify")
+        self.assertFalse(payload["retryable"])
+
     def test_boundary_failure_classes_have_stable_codes(self):
         self.assertEqual(transport.failure_code("fetch"), "E_LOAD_001")
         self.assertEqual(transport.failure_code("complete"), "E_FINALIZE_001")

@@ -8,7 +8,7 @@ import subprocess
 import traceback
 from pathlib import Path
 
-from errors import E_EXEC
+from errors import E_EXEC, E_VERIFY
 
 from resources.validate import load_registry, validate_request_backgrounds
 from engine.batch import BatchResolution, order_requests, validate_explicit_batch, write_batch_files
@@ -20,6 +20,7 @@ PENDING = Path("/tmp/batch-pending-verification.txt")
 INTERNAL_LOG = Path("/tmp/runtime-internal.log")
 DIAGNOSTIC = Path("/tmp/runtime-diagnostic.json")
 PRIVATE_DETAIL_LIMIT = 32_000
+FAILURE_CLASSIFICATION = Path("/tmp/runtime-failure-classification.json")
 
 
 class RunnerError(RuntimeError):
@@ -146,16 +147,33 @@ def record_failure(exc):
     detail = traceback.format_exc()
     if internal_detail:
         detail += "\nPrivate internal detail:\n" + internal_detail
+    classification = {}
+    if FAILURE_CLASSIFICATION.exists():
+        try:
+            classification = json.loads(
+                FAILURE_CLASSIFICATION.read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError, json.JSONDecodeError):
+            classification = {}
+    code = classification.get("error_code")
+    if code not in {E_EXEC, E_VERIFY}:
+        code = E_EXEC
+    stage = classification.get("stage")
+    if stage not in {"execute", "verify"}:
+        stage = "execute"
+    retryable = classification.get("retryable")
+    if not isinstance(retryable, bool):
+        retryable = isinstance(exc, (OSError, RunnerError))
     DIAGNOSTIC.write_text(json.dumps({
         "schema_version": 1,
-        "stage": "execute",
-        "error_code": E_EXEC,
-        "retryable": isinstance(exc, (OSError, RunnerError)),
+        "stage": stage,
+        "error_code": code,
+        "retryable": retryable,
         "execution_started": True,
         "verification_completed": False,
         "detail": detail,
     }, sort_keys=True) + "\n", encoding="utf-8")
-    return E_EXEC
+    return code
 
 
 if __name__ == "__main__":

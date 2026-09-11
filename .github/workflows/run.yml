@@ -94,7 +94,14 @@ jobs:
         run: |
           failed=0
           if [ "${{ steps.execute.outcome }}" != "success" ]; then
-            echo "::error::E_EXEC_001"
+            code="E_EXEC_001"
+            if [ -f /tmp/runtime-diagnostic.json ]; then
+              candidate="$(python -c 'import json; print(json.load(open("/tmp/runtime-diagnostic.json"))["error_code"])')"
+              case "${candidate}" in
+                E_EXEC_001|E_VERIFY_001) code="${candidate}" ;;
+              esac
+            fi
+            echo "::error::${code}"
             failed=1
           fi
           if [ "${{ steps.completion.outcome }}" != "success" ]; then
