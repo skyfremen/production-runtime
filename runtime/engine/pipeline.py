@@ -251,8 +251,8 @@ class ProductionPipeline:
             "NUMEXPR_NUM_THREADS": str(self.worker_threads),
             "TORCH_NUM_THREADS": str(self.worker_threads),
             "TORCH_INTEROP_THREADS": "1",
-            "KOKORO_ONNX_INTRA_OP_THREADS": str(self.worker_threads),
-            "KOKORO_ONNX_INTER_OP_THREADS": "1",
+            "RUNTIME_WORKER_THREADS": str(self.worker_threads),
+            "RUNTIME_WORKER_INTEROP": "1",
             "FFMPEG_THREADS": str(self.worker_threads),
         })
         return env

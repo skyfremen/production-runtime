@@ -8,8 +8,8 @@ import numpy as np
 SAMPLE_RATE = 24000
 ONNX_BACKEND = "onnx-fp32"
 PYTORCH_FALLBACK_BACKEND = "pytorch-fallback"
-ONNX_MODEL_PATH = Path(os.getenv("KOKORO_ONNX_MODEL", "/opt/kokoro-onnx/kokoro-v1.0.onnx"))
-ONNX_VOICES_PATH = Path(os.getenv("KOKORO_ONNX_VOICES", "/opt/kokoro-onnx/voices-v1.0.bin"))
+ONNX_MODEL_PATH = Path(os.getenv("RUNTIME_RESOURCE_A", "/opt/kokoro-onnx/kokoro-v1.0.onnx"))
+ONNX_VOICES_PATH = Path(os.getenv("RUNTIME_RESOURCE_B", "/opt/kokoro-onnx/voices-v1.0.bin"))
 ONNX_MAX_CHUNK_WORDS = 55
 MAX_CLIPPED_FRACTION = 0.001
 
@@ -95,10 +95,10 @@ class OnnxKokoroSynthesizer:
 
         options = onnxruntime.SessionOptions()
         options.intra_op_num_threads = runtime_thread_count(
-            "KOKORO_ONNX_INTRA_OP_THREADS", os.cpu_count() or 2
+            "RUNTIME_WORKER_THREADS", os.cpu_count() or 2
         )
         options.inter_op_num_threads = runtime_thread_count(
-            "KOKORO_ONNX_INTER_OP_THREADS", 1
+            "RUNTIME_WORKER_INTEROP", 1
         )
         started = time.monotonic()
         session = onnxruntime.InferenceSession(
@@ -148,4 +148,3 @@ class PytorchKokoroSynthesizer:
             raise RuntimeError("PyTorch Kokoro fallback produced no audio")
         audio = np.concatenate(audio_parts).astype(np.float32, copy=False)
         return audio, segments, audio_metrics(audio)
-
