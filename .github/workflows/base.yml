@@ -9,7 +9,6 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
   base:
@@ -17,4 +16,4 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Probe
-        run: echo "Base permission probe PASS"
+        run: echo "Base read-only probe PASS"
