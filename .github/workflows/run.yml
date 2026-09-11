@@ -26,7 +26,7 @@ jobs:
     timeout-minutes: 180
     environment: exec
     container:
-      image: ghcr.io/skyfremen/runtime-base@sha256:b570d4026ddd4a4ab66c98840a7f9cb078c37fdbd9464353f9f689d9a5dd232f
+      image: ghcr.io/skyfremen/runtime-base@sha256:088a5db8789e199e56d60d484e97c769ba038a992731042014fefa15d3132d7a
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}

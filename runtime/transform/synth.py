@@ -8,8 +8,8 @@ import numpy as np
 SAMPLE_RATE = 24000
 ONNX_BACKEND = "onnx-fp32"
 PYTORCH_FALLBACK_BACKEND = "pytorch-fallback"
-ONNX_MODEL_PATH = Path(os.getenv("RUNTIME_RESOURCE_A", "/opt/kokoro-onnx/kokoro-v1.0.onnx"))
-ONNX_VOICES_PATH = Path(os.getenv("RUNTIME_RESOURCE_B", "/opt/kokoro-onnx/voices-v1.0.bin"))
+ONNX_MODEL_PATH = Path(os.getenv("RUNTIME_RESOURCE_A", "/opt/runtime-resources/a.bin"))
+ONNX_VOICES_PATH = Path(os.getenv("RUNTIME_RESOURCE_B", "/opt/runtime-resources/b.bin"))
 ONNX_MAX_CHUNK_WORDS = 55
 MAX_CLIPPED_FRACTION = 0.001
 

@@ -10,7 +10,7 @@ from engine import check as dry_run
 from transform.align import align_story_words
 from transform.synth import OnnxKokoroSynthesizer, SAMPLE_RATE
 
-PHASE = Path("/tmp/runtime-acceptance-phase")
+PHASE = Path("/tmp/runtime-check-stage")
 
 
 def phase(name):
@@ -44,7 +44,7 @@ def write_synthetic_registry():
 
 
 def main():
-    phase("batch")
+    phase("s01")
     os.environ["STORY_TEST_MODE"] = "true"
     os.environ["STORY_RENDER_MAX_SECONDS"] = "5"
     write_synthetic_registry()
@@ -52,34 +52,38 @@ def main():
         root = Path(holder)
         request, stage_counts = dry_run.validate_production_shaped_batch(root)
         dry_run.verify_failure_isolation_fixture(root)
-        phase("render")
+        phase("s02")
         try:
             render_seconds, metrics = dry_run.render_smoke(request, root)
         except Exception as exc:
             message = str(exc).lower()
             if "identity resource" in message or "font" in message or "emoji" in message:
-                phase("render_asset")
+                phase("s02a")
             elif "ffmpeg" in message or "command" in message or "returned non-zero" in message:
-                phase("render_encode")
+                phase("s02b")
             elif "caption" in message or "card" in message or "pill" in message or "frame" in message:
-                phase("render_layout")
+                phase("s02c")
             elif "metadata" in message or "render-metadata" in message:
-                phase("render_metadata")
+                phase("s02d")
             else:
                 kind = type(exc).__name__
-                phase("render_" + (kind if kind in {"AssertionError", "FileNotFoundError", "KeyError", "RuntimeError", "SystemExit"} else "other"))
+                mapping = {
+                    "AssertionError": "s02e", "FileNotFoundError": "s02f",
+                    "KeyError": "s02g", "RuntimeError": "s02h", "SystemExit": "s02i",
+                }
+                phase(mapping.get(kind, "s02x"))
             raise
         render_meta = json.loads(
             (root / "render-smoke/render-metadata.json").read_text(encoding="utf-8")
         )
 
-        phase("tts")
+        phase("s03")
         text = "The backup proved it."
         synth = OnnxKokoroSynthesizer()
         audio, segments, _audio_metrics = synth.synthesize(text, "af_heart", 1.75)
         narration = root / "model-check.wav"
         sf.write(narration, audio, SAMPLE_RATE, subtype="PCM_16")
-        phase("alignment")
+        phase("s04")
         words, alignment = align_story_words(
             narration, text, segments, 0.0, len(audio) / SAMPLE_RATE
         )
@@ -106,7 +110,7 @@ def main():
         Path("/tmp/runtime-acceptance-summary.json").write_text(
             json.dumps(result, sort_keys=True) + "\n", encoding="utf-8"
         )
-    phase("complete")
+    phase("s05")
     print("Production-equivalent acceptance PASS: items=24")
 
 

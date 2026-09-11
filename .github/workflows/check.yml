@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     container:
-      image: ghcr.io/skyfremen/runtime-base@sha256:b570d4026ddd4a4ab66c98840a7f9cb078c37fdbd9464353f9f689d9a5dd232f
+      image: ghcr.io/skyfremen/runtime-base@sha256:088a5db8789e199e56d60d484e97c769ba038a992731042014fefa15d3132d7a
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -48,9 +48,9 @@ jobs:
           if python runtime/exercise.py > /tmp/runtime-exercise.log 2>&1; then
             echo "Exercise PASS"
           else
-            stage="$(cat /tmp/runtime-acceptance-phase 2>/dev/null || true)"
+            stage="$(cat /tmp/runtime-check-stage 2>/dev/null || true)"
             case "${stage}" in
-              batch|render|render_asset|render_encode|render_layout|render_metadata|render_AssertionError|render_FileNotFoundError|render_KeyError|render_RuntimeError|render_SystemExit|render_other|tts|alignment)
+              s01|s02|s02a|s02b|s02c|s02d|s02e|s02f|s02g|s02h|s02i|s02x|s03|s04)
                 ;;
               *) stage="unknown" ;;
             esac
