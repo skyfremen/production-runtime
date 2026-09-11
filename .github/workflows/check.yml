@@ -1,0 +1,17 @@
+name: Recovery Probe
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/check.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Legacy workflow registration PASS"
