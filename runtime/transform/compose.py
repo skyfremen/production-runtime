@@ -617,7 +617,7 @@ def main():
     if FFMPEG_THREADS:
         ffmpeg_command.extend(["-threads", str(FFMPEG_THREADS)])
     ffmpeg_command.extend([
-        "-c:a", "aac", "-profile:a", "aac_low", "-ar", "48000", "-b:a", "160k",
+        "-c:a", "aac", "-ar", "48000", "-b:a", "160k",
         "-movflags", "+faststart", str(video),
     ])
     ffmpeg_duration_seconds, ffmpeg_stderr = run_capture(ffmpeg_command)
