@@ -1,6 +1,7 @@
 """Safe production-equivalent acceptance with no network publication path."""
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -132,6 +133,14 @@ def main():
         Path("/tmp/runtime-acceptance-summary.json").write_text(
             json.dumps(result, sort_keys=True) + "\n", encoding="utf-8"
         )
+
+        preview_output = os.environ.get("RUNTIME_PREVIEW_OUTPUT")
+        if preview_output:
+            preview_source = root / "render-smoke/short.mp4"
+            preview_target = Path(preview_output)
+            preview_target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(preview_source, preview_target)
+
     phase("s05")
     print("Production-equivalent acceptance PASS: items=24")
 
