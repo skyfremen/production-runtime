@@ -31,9 +31,14 @@ VIDEO_ID = re.compile(r"[A-Za-z0-9_-]{11}")
 def expected_publication(request_data, *, require_future=True, now_utc=None):
     publication = request_data.get("publication")
     if not isinstance(publication, dict):
-        raise ValueError("Scheduled publication contract is required")
-    if publication.get("mode") != "scheduled":
-        raise ValueError("publication.mode must be scheduled")
+        raise ValueError("Publication contract is required")
+    mode = publication.get("mode")
+    if mode == "immediate":
+        if publication.get("publish_at") is not None:
+            raise ValueError("Immediate publication requires publish_at=null")
+        return None
+    if mode != "scheduled":
+        raise ValueError("publication.mode must be scheduled or immediate")
     raw = str(publication.get("publish_at", ""))
     if not raw.endswith("Z"):
         raise ValueError("Scheduled publish_at must be UTC RFC3339 ending Z")
@@ -60,10 +65,11 @@ def _append_unique_tag(tags, seen, value):
 
 
 def build_upload_body(request_data, *, require_future=True, now_utc=None):
-    """Build the canonical private + publishAt YouTube request body."""
+    """Build the canonical scheduled or immediate-public YouTube request body."""
     publish_at = expected_publication(
         request_data, require_future=require_future, now_utc=now_utc
     )
+    mode = request_data["publication"]["mode"]
     marker = marker_tag(request_content_id(request_data))
     youtube = request_data["youtube"]
     description = str(youtube["description"]).strip()
@@ -92,6 +98,13 @@ def build_upload_body(request_data, *, require_future=True, now_utc=None):
     if tag_cost > 500:
         raise ValueError("Tags exceed YouTube's combined 500-character limit")
 
+    status = {
+        "privacyStatus": "public" if mode == "immediate" else "private",
+        "selfDeclaredMadeForKids": bool(youtube["made_for_kids"]),
+    }
+    if mode == "scheduled":
+        status["publishAt"] = publish_at
+
     return {
         "snippet": {
             "title": str(youtube["title"]),
@@ -99,11 +112,7 @@ def build_upload_body(request_data, *, require_future=True, now_utc=None):
             "tags": tags,
             "categoryId": str(youtube["category_id"]),
         },
-        "status": {
-            "privacyStatus": "private",
-            "selfDeclaredMadeForKids": bool(youtube["made_for_kids"]),
-            "publishAt": publish_at,
-        },
+        "status": status,
     }
 
 
@@ -328,13 +337,22 @@ def upload_new(youtube, request_data, video_path, body):
     from googleapiclient.http import MediaFileUpload
 
     publish_at = expected_publication(request_data)
+    mode = request_data.get("publication", {}).get("mode")
     status = body.get("status", {})
-    if status.get("privacyStatus") != "private":
-        raise RecoveryBlocked("Scheduled upload must enter YouTube as private")
-    if status.get("publishAt") != publish_at:
-        raise RecoveryBlocked(
-            "Scheduled upload body does not match immutable publication time"
-        )
+    if mode == "scheduled":
+        if status.get("privacyStatus") != "private":
+            raise RecoveryBlocked("Scheduled upload must enter YouTube as private")
+        if status.get("publishAt") != publish_at:
+            raise RecoveryBlocked(
+                "Scheduled upload body does not match immutable publication time"
+            )
+    elif mode == "immediate":
+        if status.get("privacyStatus") != "public":
+            raise RecoveryBlocked("Immediate upload must enter YouTube as public")
+        if "publishAt" in status:
+            raise RecoveryBlocked("Immediate upload body must not contain publishAt")
+    else:
+        raise RecoveryBlocked("Unsupported publication mode")
     media = MediaFileUpload(str(video_path), mimetype="video/mp4", resumable=True)
     request = youtube.videos().insert(
         part="snippet,status", body=body, media_body=media
