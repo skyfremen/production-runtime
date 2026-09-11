@@ -2,7 +2,7 @@ import sys
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 BASE = ROOT / "runtime"
@@ -25,8 +25,8 @@ class ObservationTests(unittest.TestCase):
             "start_date": "2026-06-13",
             "end_date": "2026-09-11",
         })
-        aggregate.assert_called_once_with(unittest.mock.ANY, "2026-06-13", "2026-09-11")
-        recent.assert_called_once_with(unittest.mock.ANY, now)
+        aggregate.assert_called_once_with(ANY, "2026-06-13", "2026-09-11")
+        recent.assert_called_once_with(ANY, now)
 
     def test_sink_rejects_rows_without_video_identity(self):
         payload = {
