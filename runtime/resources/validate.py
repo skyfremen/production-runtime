@@ -187,14 +187,9 @@ def validate_registry_data(data):
                         errors.append(
                             f"{r_label}: file_size_bytes must be a positive integer"
                         )
-            if renditions and not any(
-                rendition_is_production_suitable(rendition)
-                for rendition in renditions
-                if isinstance(rendition, dict)
-            ):
-                errors.append(
-                    f"{label}: no <=1080p production rendition can fill 720x1280 within bounded upscale"
-                )
+            # A valid cached logical asset may temporarily lack a rendition that
+            # meets the current output floor. Planning excludes it and runtime
+            # can use only the frozen backup; the registry itself remains usable.
         if any(k in asset for k in ("usage_count", "last_used_at", "last_used_short_id")):
             errors.append(
                 f"{label}: usage history belongs in result receipts, not the registry"
@@ -253,4 +248,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

@@ -2,7 +2,7 @@
 
 This module is intentionally not wired to a recurring workflow. It exercises
 real media resolution/download, Kokoro TTS, Wav2Vec2 alignment, the canonical
-720x1280 FFmpeg render and verify_render without touching YouTube or durable
+1080x1920 FFmpeg render and verify_render without touching external publication or durable
 GitHub publication state.
 """
 import argparse
@@ -44,7 +44,7 @@ def representative_script(index):
         "I kept the backup, but I never needed to defend that story again.",
     ]
     # Roughly 520 words: representative of the current 120-175 second target at
-    # the pinned af_heart 1.75x narration speed without changing render settings.
+    # the frozen story-aware 1.75x narration speed without changing render settings.
     rotated = sentences[index % len(sentences):] + sentences[:index % len(sentences)]
     return " ".join(rotated * 4)
 
@@ -263,4 +263,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

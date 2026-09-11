@@ -53,28 +53,28 @@ class RenditionSelectionTests(unittest.TestCase):
         ])
         self.assertEqual(media_resolver.select_best_rendition(item)["id"], "r1080")
 
-    def test_exact_target_is_preferred(self):
-        item = asset(1, [rendition("r1080", 1080, 1920), rendition("r720", 720, 1280)])
-        self.assertEqual(media_resolver.select_best_rendition(item)["id"], "r720")
+    def test_weak_vertical_source_is_rejected(self):
+        item = asset(1, [rendition("r1080", 1080, 1920), rendition("r540", 540, 960)])
+        self.assertEqual(media_resolver.select_best_rendition(item)["id"], "r1080")
 
     def test_smallest_sufficient_area_is_preferred(self):
         item = asset(1, [rendition("r4k", 2160, 3840), rendition("r1080", 1080, 1920)])
         self.assertEqual(media_resolver.select_best_rendition(item)["id"], "r1080")
 
-    def test_landscape_1080p_is_allowed_but_uhd_is_never_production_candidate(self):
+    def test_landscape_is_evaluated_after_vertical_crop(self):
         hd720 = rendition("landscape-720", 1280, 720)
         full_hd = rendition("landscape-hd", 1920, 1080)
         qhd = rendition("landscape-qhd", 2560, 1440)
         four_k = rendition("landscape-4k", 3840, 2160)
         self.assertFalse(rendition_is_production_suitable(hd720))
-        self.assertTrue(rendition_is_production_suitable(full_hd))
+        self.assertFalse(rendition_is_production_suitable(full_hd))
         self.assertFalse(rendition_is_production_suitable(qhd))
-        self.assertFalse(rendition_is_production_suitable(four_k))
+        self.assertTrue(rendition_is_production_suitable(four_k))
         geometry = crop_fill_geometry(1920, 1080)
-        self.assertAlmostEqual(geometry["scale_factor"], 1280 / 1080, places=3)
-        self.assertLess(geometry["scale_factor"], 1.25)
+        self.assertAlmostEqual(geometry["effective_crop_width"], 607.5, places=1)
+        self.assertAlmostEqual(geometry["scale_factor"], 1920 / 1080, places=3)
 
-    def test_horizontal_4k_origin_prefers_1080p_rendition(self):
+    def test_horizontal_4k_is_selected_only_when_lower_renditions_fail_post_crop(self):
         item = asset(1, [
             rendition("4k", 3840, 2160, 30, 36_000_000),
             rendition("qhd", 2560, 1440, 30, 21_000_000),
@@ -82,8 +82,7 @@ class RenditionSelectionTests(unittest.TestCase):
             rendition("hd", 1280, 720, 30, 6_000_000),
         ])
         selected = media_resolver.select_best_rendition(item)
-        self.assertEqual(selected["id"], "fhd")
-        self.assertLessEqual(selected["width"] * selected["height"], 1920 * 1080)
+        self.assertEqual(selected["id"], "4k")
 
     def test_30fps_is_preferred_over_equivalent_60fps(self):
         item = asset(1, [rendition("r60", 1080, 1920, 60), rendition("r30", 1080, 1920, 30)])
@@ -95,7 +94,7 @@ class RenditionSelectionTests(unittest.TestCase):
     def test_generic_original_fallback_refuses_unknown_or_oversized_original(self):
         unknown = asset(1)
         oversized = asset(2)
-        oversized.update({"width": 3840, "height": 2160, "fps": 30})
+        oversized.update({"width": 7680, "height": 4320, "fps": 30})
         bounded = asset(3)
         bounded.update({"width": 1080, "height": 1920, "fps": 30})
         self.assertIsNone(media_resolver.generic_fallback(unknown))
@@ -103,12 +102,12 @@ class RenditionSelectionTests(unittest.TestCase):
         self.assertIsNotNone(media_resolver.generic_fallback(bounded))
 
     def test_render_ready_h264_is_not_normalized_again(self):
-        probe = {"codec": "h264", "width": 720, "height": 1280, "fps": 29.97}
+        probe = {"codec": "h264", "width": 1080, "height": 1920, "fps": 29.97}
         self.assertFalse(media_resolver.normalization_required(probe))
 
     def test_oversized_or_wrong_codec_background_is_normalized(self):
-        oversized = {"codec": "h264", "width": 1920, "height": 1080, "fps": 30}
-        wrong_codec = {"codec": "vp9", "width": 720, "height": 1280, "fps": 30}
+        oversized = {"codec": "h264", "width": 3840, "height": 2160, "fps": 30}
+        wrong_codec = {"codec": "vp9", "width": 1080, "height": 1920, "fps": 30}
         self.assertTrue(media_resolver.normalization_required(oversized))
         self.assertTrue(media_resolver.normalization_required(wrong_codec))
 
@@ -116,8 +115,8 @@ class RenditionSelectionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             target = Path(temporary) / "background.asset"
             target.write_bytes(b"s" * 12000)
-            source_probe = {"codec": "h264", "width": 1920, "height": 1080, "fps": 29.97}
-            output_probe = {"codec": "h264", "width": 720, "height": 1280, "fps": 30.0}
+            source_probe = {"codec": "h264", "width": 3840, "height": 2160, "fps": 29.97}
+            output_probe = {"codec": "h264", "width": 1080, "height": 1920, "fps": 30.0}
 
             def fake_run(command, **_kwargs):
                 Path(command[-1]).write_bytes(b"n" * 12000)
@@ -133,7 +132,7 @@ class RenditionSelectionTests(unittest.TestCase):
             command = runner.call_args.args[0]
             self.assertIn("libx264", command)
             self.assertIn("ultrafast", command)
-            self.assertIn("fps=30,scale=720:1280", command[command.index("-vf") + 1])
+            self.assertIn("fps=30,scale=1080:1920", command[command.index("-vf") + 1])
 
 
 class HttpTransportTests(unittest.TestCase):
@@ -173,7 +172,7 @@ class ResolverFallbackTests(unittest.TestCase):
         return True, "HTTP 206, video/mp4", 0.01
 
     @staticmethod
-    def download_ok(_asset, rendition_value, _target, _width, _height):
+    def download_ok(_asset, rendition_value, _target, _width, _height, _duration=175):
         return {
             "downloaded_bytes": 123456, "download_duration_seconds": 0.5,
             "source_probe": {"width": rendition_value["width"], "height": rendition_value["height"],
@@ -188,13 +187,13 @@ class ResolverFallbackTests(unittest.TestCase):
 
     def test_failed_best_uses_next_rendition_same_logical_asset(self):
         self.write_registry([
-            asset(1, [rendition("best", 720, 1280), rendition("next", 1080, 1920)]),
-            asset(2, [rendition("backup", 720, 1280)]),
+            asset(1, [rendition("best", 1080, 1920), rendition("next", 2160, 3840)]),
+            asset(2, [rendition("backup", 1080, 1920)]),
         ])
-        def downloader(asset_value, rendition_value, target, width, height):
+        def downloader(asset_value, rendition_value, target, width, height, duration):
             if rendition_value["id"] == "best":
                 raise RuntimeError("simulated failure")
-            return self.download_ok(asset_value, rendition_value, target, width, height)
+            return self.download_ok(asset_value, rendition_value, target, width, height, duration)
         result = self.resolve(download_side_effect=downloader)
         self.assertEqual(result["background_asset_id"], "satisfying-001")
         self.assertEqual(result["rendition"]["id"], "next")
@@ -203,13 +202,13 @@ class ResolverFallbackTests(unittest.TestCase):
 
     def test_all_primary_renditions_fail_then_logical_backup(self):
         self.write_registry([
-            asset(1, [rendition("primary", 720, 1280)]),
-            asset(2, [rendition("backup", 720, 1280)]),
+            asset(1, [rendition("primary", 1080, 1920)]),
+            asset(2, [rendition("backup", 1080, 1920)]),
         ])
-        def downloader(asset_value, rendition_value, target, width, height):
+        def downloader(asset_value, rendition_value, target, width, height, duration):
             if asset_value["id"] == "satisfying-001":
                 raise RuntimeError("primary failed")
-            return self.download_ok(asset_value, rendition_value, target, width, height)
+            return self.download_ok(asset_value, rendition_value, target, width, height, duration)
         result = self.resolve(download_side_effect=downloader)
         self.assertEqual(result["background_asset_id"], "satisfying-002")
         self.assertEqual(result["background_selection"], "backup")
@@ -217,9 +216,9 @@ class ResolverFallbackTests(unittest.TestCase):
 
     def test_never_substitutes_unrequested_third_asset(self):
         self.write_registry([
-            asset(1, [rendition("primary", 720, 1280)]),
-            asset(2, [rendition("backup", 720, 1280)]),
-            asset(3, [rendition("third", 720, 1280)]),
+            asset(1, [rendition("primary", 1080, 1920)]),
+            asset(2, [rendition("backup", 1080, 1920)]),
+            asset(3, [rendition("third", 1080, 1920)]),
         ])
         attempted = []
         def failing_preflight(url):
@@ -241,7 +240,7 @@ class ResolverFallbackTests(unittest.TestCase):
         self.assertEqual(stored["requested_primary_id"], "satisfying-001")
         self.assertEqual(stored["rendition"]["id"], "physical-1")
         self.assertEqual(stored["rendition"]["width"], 1080)
-        self.assertEqual(stored["target"], {"width": 720, "height": 1280, "fps": 30})
+        self.assertEqual(stored["target"], {"width": 1080, "height": 1920, "fps": 30})
         self.assertEqual(stored["metrics"]["downloaded_bytes"], 123456)
 
 

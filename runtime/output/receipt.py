@@ -33,8 +33,9 @@ def _scheduled_publish_at(request, evidence):
 
 def build_receipt(request_path, request, upload, selection, render_meta):
     content_id = ensure_request_path_matches(request_path, request)
-    if request.get("schema_version") != 3:
-        raise RecoveryBlocked("Only schema-v3 requests can produce receipts")
+    schema_version = request.get("schema_version")
+    if schema_version not in {3, 4}:
+        raise RecoveryBlocked("Only schema-v3/v4 requests can produce receipts")
 
     identity = {
         key: upload.get(key)
@@ -78,11 +79,15 @@ def build_receipt(request_path, request, upload, selection, render_meta):
     if render_meta.get("render_verified") is not True or render_meta.get("content_id") != content_id:
         raise RecoveryBlocked("A verified render for this content ID is required")
     render_contract = (
-        ("resolution", "720x1280"),
+        ("resolution", "1080x1920"),
         ("fps", 30),
         ("video_codec", "h264"),
         ("audio_codec", "aac"),
         ("audio_stream_count", 1),
+        ("h264_profile", "High"),
+        ("pixel_format", "yuv420p"),
+        ("color_space", "bt709"),
+        ("audio_sample_rate", 48000),
         ("narration_engine", "kokoro"),
         ("narration_voice", request["narration"]["voice"]),
         ("narration_speed", request["narration"]["speed"]),
@@ -127,7 +132,7 @@ def build_receipt(request_path, request, upload, selection, render_meta):
         total_production_seconds = None
 
     return {
-        "schema_version": 3,
+        "schema_version": schema_version,
         **identity,
         "youtube_video_id": upload["youtube_video_id"],
         "youtube_url": upload["youtube_url"],
@@ -163,6 +168,8 @@ def build_receipt(request_path, request, upload, selection, render_meta):
         "narration_engine": render_meta["narration_engine"],
         "narration_voice": render_meta["narration_voice"],
         "narration_speed": render_meta["narration_speed"],
+        "lead_gender": request["story"].get("lead_gender"),
+        "story_tone": request["story"].get("story_tone"),
         "narration_seconds": render_meta["narration_seconds"],
         "video_seconds": render_meta["video_seconds"],
         "resolution": render_meta["resolution"],
@@ -170,6 +177,13 @@ def build_receipt(request_path, request, upload, selection, render_meta):
         "video_codec": render_meta["video_codec"],
         "audio_codec": render_meta["audio_codec"],
         "audio_stream_count": render_meta["audio_stream_count"],
+        "h264_profile": render_meta["h264_profile"],
+        "pixel_format": render_meta["pixel_format"],
+        "color_space": render_meta["color_space"],
+        "audio_sample_rate": render_meta["audio_sample_rate"],
+        "background_readability_protection_applied": render_meta.get(
+            "background_readability_protection_applied"
+        ),
         "render_verification": render_meta,
         "renderer_source_commit": origin["code_commit_sha"],
         "upload_workflow": origin,
@@ -232,7 +246,7 @@ def main():
     if existing:
         check_identity(existing.data, identity)
         if (
-            existing.data.get("schema_version") != 3
+            existing.data.get("schema_version") != candidate["schema_version"]
             or existing.data.get("verification", {}).get("passed") is not True
         ):
             raise RecoveryBlocked("Existing receipt is incomplete or invalid")
@@ -281,4 +295,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

@@ -243,7 +243,7 @@ def audit_ai_selection(registry, primary_id, backup_id, receipts, requirements=N
         if audit["hard_avoided"]:
             errors.append(f"{label} background {asset_id} was used within the last 10 Shorts")
         if not audit["rendition_ready"]:
-            errors.append(f"{label} background {asset_id} has no <=1080p production rendition")
+            errors.append(f"{label} background {asset_id} has no qualifying post-crop 1080x1920 rendition")
         selected.append((label, audit))
     return {
         "passed": not errors,
@@ -279,4 +279,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

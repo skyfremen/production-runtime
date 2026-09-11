@@ -10,7 +10,7 @@ from transform.compose import render_emoji
 
 
 class EmojiRenderTests(unittest.TestCase):
-    # Regression: native 720p rendering must preserve the requested contextual
+    # Regression: native 1080p rendering must preserve the requested contextual
     # emojis, not collapse them into the old identical-dot fallback.
     def test_requested_emojis_render_as_distinct_images(self):
         icons = ["💼", "⏰", "📧", "😳", "🔥"]

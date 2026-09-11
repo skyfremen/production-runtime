@@ -35,54 +35,54 @@ EMOJI_FONT_CANDIDATES = [
 ]
 CARD_TRANSITION_SECONDS = 0.30
 
-VIDEO_WIDTH = 720
-VIDEO_HEIGHT = 1280
+VIDEO_WIDTH = 1080
+VIDEO_HEIGHT = 1920
 FFMPEG_THREADS = max(0, int(os.getenv("FFMPEG_THREADS", "0")))
 
-CAPTION_MARGIN_X = 85
+CAPTION_MARGIN_X = 128
 CAPTION_MAX_WIDTH = VIDEO_WIDTH - (2 * CAPTION_MARGIN_X)
-CAPTION_FONT_SIZE = 52
-CAPTION_MIN_FONT_SIZE = 39
+CAPTION_FONT_SIZE = 78
+CAPTION_MIN_FONT_SIZE = 59
 CAPTION_MAX_LINES = 3
-CAPTION_OUTLINE = 5
-CAPTION_SHADOW = 1
+CAPTION_OUTLINE = 8
+CAPTION_SHADOW = 2
 
-CARD_BOX = (37, 157, 683, 537)
-CARD_RADIUS = 24
-CARD_SHADOWS = ((7, 55), (12, 25))
-CARD_BORDER_WIDTH = 3
-AVATAR_SIZE = 88
-AVATAR_POS = (55, 193)
-CHANNEL_NAME_POS = (157, 190)
-CHANNEL_NAME_FONT_SIZE = 27
-VERIFIED_ICON_SIZE = 25
-VERIFIED_ICON_GAP = 12
-VERIFIED_ICON_Y_OFFSET = 3
-EMOJI_ROW_Y = 233
-EMOJI_STEP_X = 51
-EMOJI_TARGET_SIZE = 44
-EMOJI_CELL_SIZE = 39
-HOOK_POS = (57, 303)
-HOOK_MAX_WIDTH = 600
-HOOK_MAX_HEIGHT = 147
-HOOK_MAX_FONT_SIZE = 43
-HOOK_MIN_FONT_SIZE = 27
-HOOK_LINE_GAP = 6
-FOOTER_Y = 495
-FOOTER_FONT_SIZE = 20
-LIKE_ICON_SIZE = 20
-COMMENT_ICON_SIZE = 21
-SHARE_ICON_SIZE = 19
-LIKE_X = 55
-COMMENT_X = 143
-SHARE_X = 579
-FOOTER_TEXT_GAP = 7
-HANDLE_PILL = (190, 840, 530, 889)
-SUBSCRIBE_PILL = (240, 899, 480, 945)
-HANDLE_FONT_SIZE = 28
-SUBSCRIBE_FONT_SIZE = 25
-PILL_OUTLINE_WIDTH = 1
-CARD_BOB_AMPLITUDE = 4
+CARD_BOX = (56, 236, 1024, 806)
+CARD_RADIUS = 36
+CARD_SHADOWS = ((11, 55), (18, 25))
+CARD_BORDER_WIDTH = 5
+AVATAR_SIZE = 132
+AVATAR_POS = (83, 290)
+CHANNEL_NAME_POS = (236, 285)
+CHANNEL_NAME_FONT_SIZE = 41
+VERIFIED_ICON_SIZE = 38
+VERIFIED_ICON_GAP = 18
+VERIFIED_ICON_Y_OFFSET = 5
+EMOJI_ROW_Y = 350
+EMOJI_STEP_X = 77
+EMOJI_TARGET_SIZE = 66
+EMOJI_CELL_SIZE = 59
+HOOK_POS = (86, 455)
+HOOK_MAX_WIDTH = 900
+HOOK_MAX_HEIGHT = 221
+HOOK_MAX_FONT_SIZE = 65
+HOOK_MIN_FONT_SIZE = 41
+HOOK_LINE_GAP = 9
+FOOTER_Y = 743
+FOOTER_FONT_SIZE = 30
+LIKE_ICON_SIZE = 30
+COMMENT_ICON_SIZE = 32
+SHARE_ICON_SIZE = 29
+LIKE_X = 83
+COMMENT_X = 215
+SHARE_X = 869
+FOOTER_TEXT_GAP = 11
+HANDLE_PILL = (285, 1260, 795, 1334)
+SUBSCRIBE_PILL = (360, 1349, 720, 1418)
+HANDLE_FONT_SIZE = 42
+SUBSCRIBE_FONT_SIZE = 38
+PILL_OUTLINE_WIDTH = 2
+CARD_BOB_AMPLITUDE = 6
 X264_PRESET = "superfast"
 X264_CRF = 19
 BLACKDETECT_FILTER = "blackdetect=d=0.50:pic_th=0.98:pix_th=0.10"
@@ -393,7 +393,7 @@ def main():
     cfg = expected_video_config()
     fps = cfg["fps"]
     if (cfg["width"], cfg["height"]) != (VIDEO_WIDTH, VIDEO_HEIGHT):
-        raise SystemExit("Transformation requires fixed 720x1280 dimensions")
+        raise SystemExit("Transformation requires fixed 1080x1920 dimensions")
     if fps <= 0:
         raise SystemExit("VIDEO_FPS must be positive")
     W, H = VIDEO_WIDTH, VIDEO_HEIGHT
@@ -566,8 +566,22 @@ def main():
 
     card_path = OUTPUT_DIR / "story-card.png"
     brand_path = OUTPUT_DIR / "branding.png"
+    contrast_path = OUTPUT_DIR / "caption-contrast.png"
     card.save(card_path)
     brand.save(brand_path)
+    readability = selection.get("readability") or {}
+    protection_alpha = float(readability.get("protection_alpha", 0.18))
+    protection_alpha = min(0.38, max(0.18, protection_alpha))
+    contrast = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    contrast_draw = ImageDraw.Draw(contrast)
+    center, half = H * 0.51, H * 0.25
+    for y in range(H):
+        distance = abs(y - center) / half
+        strength = max(0.0, 1.0 - distance * distance)
+        alpha = int(round(255 * protection_alpha * strength))
+        if alpha:
+            contrast_draw.line((0, y, W, y), fill=(0, 0, 0, alpha))
+    contrast.save(contrast_path)
 
     events = caption_events(narration_text, tts_segments, story_duration, start_offset=story_start)
     ass = OUTPUT_DIR / "captions.ass"
@@ -580,8 +594,9 @@ def main():
         f"[0:v]fps={fps},scale={W}:{H}:force_original_aspect_ratio=increase,"
         f"crop={W}:{H},eq=brightness=-0.03:saturation=1.03[bg];"
         f"[1:v]format=rgba,fade=t=out:st={card_fade_start:.2f}:d={card_fade_dur:.2f}:alpha=1[card];"
-        "[2:v]format=rgba[brand];"
-        f"[bg][card]overlay=x=0:y='-{CARD_BOB_AMPLITUDE}*sin(PI*t/2)'[tmp1];"
+        "[2:v]format=rgba[brand];[3:v]format=rgba[shade];"
+        "[bg][shade]overlay=0:0[protected];"
+        f"[protected][card]overlay=x=0:y='-{CARD_BOB_AMPLITUDE}*sin(PI*t/2)'[tmp1];"
         "[tmp1][brand]overlay=0:0[tmp2];"
         f"[tmp2]subtitles='{ass.as_posix()}',{BLACKDETECT_FILTER}[v]"
     )
@@ -590,16 +605,20 @@ def main():
         "-stream_loop", "-1", "-i", str(background),
         "-loop", "1", "-i", str(card_path),
         "-loop", "1", "-i", str(brand_path),
+        "-loop", "1", "-i", str(contrast_path),
         "-i", str(narration),
         "-filter_complex", filter_complex,
-        "-map", "[v]", "-map", "3:a:0",
+        "-map", "[v]", "-map", "4:a:0",
         "-t", f"{final_duration:.3f}",
-        "-c:v", "libx264", "-preset", X264_PRESET, "-crf", str(X264_CRF), "-pix_fmt", "yuv420p",
+        "-c:v", "libx264", "-profile:v", "high", "-preset", X264_PRESET,
+        "-crf", str(X264_CRF), "-pix_fmt", "yuv420p", "-r", "30",
+        "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709",
     ]
     if FFMPEG_THREADS:
         ffmpeg_command.extend(["-threads", str(FFMPEG_THREADS)])
     ffmpeg_command.extend([
-        "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", str(video),
+        "-c:a", "aac", "-profile:a", "aac_low", "-ar", "48000", "-b:a", "160k",
+        "-movflags", "+faststart", str(video),
     ])
     ffmpeg_duration_seconds, ffmpeg_stderr = run_capture(ffmpeg_command)
     black_durations = [
@@ -650,6 +669,13 @@ def main():
         "ffmpeg_duration_seconds": ffmpeg_duration_seconds,
         "x264_preset": X264_PRESET,
         "x264_crf": X264_CRF,
+        "h264_profile": "High",
+        "pixel_format": "yuv420p",
+        "color_space": "bt709",
+        "audio_sample_rate": 48000,
+        "background_readability_protection_applied": True,
+        "background_readability_protection": "soft_caption_band",
+        "background_readability_protection_alpha": protection_alpha,
         "ffmpeg_threads": FFMPEG_THREADS or "auto",
         "inline_blackdetect_passed": inline_blackdetect_passed,
         "inline_blackdetect_max_duration_seconds": round(inline_blackdetect_max, 6),

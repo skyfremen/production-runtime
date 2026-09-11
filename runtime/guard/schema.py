@@ -17,7 +17,8 @@ from profile.config import (
 )
 from base.contract import ensure_request_path_matches, load_json
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
+SUPPORTED_SCHEMA_VERSIONS = {3, 4}
 FORBIDDEN_KEYS = {
     "setup", "payoff", "cta", "comedy_mechanism", "series_role", "series_id",
     "series_title", "part_number", "part_total", "next_part_slot", "duration_seconds",
@@ -30,6 +31,7 @@ TOP_LEVEL_KEYS = {
     "youtube", "publication", "planning",
 }
 STORY_KEYS = {"category", "story_type", "hook", "script", "card_emojis"}
+STORY_V4_KEYS = STORY_KEYS | {"lead_gender", "story_tone"}
 NARRATION_KEYS = {"engine", "voice", "speed"}
 VISUAL_KEYS = {"background_primary_id", "background_backup_id"}
 YOUTUBE_KEYS = {"title", "description", "hashtags", "tags", "category_id", "made_for_kids"}
@@ -49,6 +51,20 @@ RETIRED_NAME = "Wa" + "cky " + "Insights"
 RETIRED_HANDLE = "@WA" + "CKY" + "INSIGHTS"
 RETIRED_HASHTAG = "#wa" + "cky" + "insights"
 RETIRED_BRANDING = (RETIRED_HANDLE, RETIRED_HASHTAG, RETIRED_NAME)
+LEAD_GENDERS = {"female", "male"}
+NATURAL_TONES = {"natural", "general", "conversational", "warm", "calm"}
+EXPRESSIVE_TONES = {"comedy", "dramatic", "sarcastic", "dramatic_comedy", "absurd", "expressive"}
+STORY_TONES = NATURAL_TONES | EXPRESSIVE_TONES
+APPROVED_VOICES = {"af_heart", "af_bella", "am_echo", "am_fenrir"}
+
+
+def expected_voice(lead_gender, story_tone):
+    if lead_gender not in LEAD_GENDERS or story_tone not in STORY_TONES:
+        return None
+    expressive = story_tone in EXPRESSIVE_TONES
+    if lead_gender == "female":
+        return "af_bella" if expressive else "af_heart"
+    return "am_fenrir" if expressive else "am_echo"
 
 
 def _nonempty(value):
@@ -192,8 +208,9 @@ def validate_request_data(data, request_path=None):
     errors = []
     if not isinstance(data, dict):
         return ["request root must be an object"]
-    if data.get("schema_version") != SCHEMA_VERSION:
-        errors.append(f"schema_version must be {SCHEMA_VERSION}")
+    schema_version = data.get("schema_version")
+    if schema_version not in SUPPORTED_SCHEMA_VERSIONS:
+        errors.append("schema_version must be 3 or 4")
 
     missing_top, extra_top = TOP_LEVEL_KEYS - set(data), set(data) - TOP_LEVEL_KEYS
     if missing_top:
@@ -221,7 +238,8 @@ def validate_request_data(data, request_path=None):
     if not isinstance(story, dict):
         errors.append("story must be an object")
     else:
-        missing, extra = STORY_KEYS - set(story), set(story) - STORY_KEYS
+        required_story_keys = STORY_V4_KEYS if schema_version == 4 else STORY_KEYS
+        missing, extra = required_story_keys - set(story), set(story) - required_story_keys
         if missing:
             errors.append("story missing fields: " + ", ".join(sorted(missing)))
         if extra:
@@ -242,6 +260,11 @@ def validate_request_data(data, request_path=None):
             errors.append("story.card_emojis entries must be non-empty")
         if any(term.lower() in str(story.get("script", "")).lower() for term in RETIRED_BRANDING):
             errors.append("story script contains obsolete channel branding")
+        if schema_version == 4:
+            if story.get("lead_gender") not in LEAD_GENDERS:
+                errors.append("story.lead_gender must be female or male")
+            if story.get("story_tone") not in STORY_TONES:
+                errors.append("story.story_tone is not an approved controlled tone")
 
     narration = data.get("narration")
     if not isinstance(narration, dict):
@@ -251,8 +274,17 @@ def validate_request_data(data, request_path=None):
             errors.append("narration must contain exactly engine, voice, speed")
         if narration.get("engine") != "kokoro":
             errors.append("narration.engine must be kokoro")
-        if narration.get("voice") != "af_heart":
-            errors.append("narration.voice must be af_heart")
+        voice = narration.get("voice")
+        if voice not in APPROVED_VOICES:
+            errors.append("narration.voice is not in the approved voice pool")
+        elif schema_version == 3 and voice != "af_heart":
+            errors.append("legacy schema-v3 narration.voice must be af_heart")
+        elif schema_version == 4 and isinstance(story, dict):
+            required_voice = expected_voice(story.get("lead_gender"), story.get("story_tone"))
+            if required_voice and voice != required_voice:
+                errors.append(
+                    f"narration.voice must be {required_voice} for the frozen lead gender and tone"
+                )
         try:
             speed = float(narration.get("speed"))
             if abs(speed - 1.75) > 0.001:
@@ -325,7 +357,7 @@ def validate_request(path):
     errors = validate_request_data(data, request_path=path)
     if errors:
         raise SystemExit("Input validation failed:\n- " + "\n- ".join(errors))
-    print(f"Request valid: {path.name}; schema={SCHEMA_VERSION}")
+    print(f"Request valid: {path.name}; schema={data['schema_version']}")
     return data
 
 

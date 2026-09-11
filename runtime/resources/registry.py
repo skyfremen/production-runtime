@@ -136,7 +136,7 @@ def enrich_asset(asset, video, retrieved_at=None):
         )
     if not any(rendition_is_production_suitable(item) for item in renditions):
         raise ValueError(
-            f"Pexels returned no <=1080p production rendition within bounded crop-fill upscale for {asset['id']}"
+            f"Provider returned no physical rendition meeting the post-crop 1080x1920 quality floor for {asset['id']}"
         )
     asset["provider_asset_id"] = str(video["id"])
     asset["source_page"] = str(video.get("url") or asset["source_page"])

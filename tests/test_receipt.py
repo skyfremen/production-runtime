@@ -37,11 +37,15 @@ class ResultReceiptTests(unittest.TestCase):
             "narration_speed": 1.75,
             "narration_seconds": 150.0,
             "video_seconds": 151.0,
-            "resolution": "720x1280",
+            "resolution": "1080x1920",
             "fps": 30,
             "video_codec": "h264",
             "audio_codec": "aac",
             "audio_stream_count": 1,
+            "h264_profile": "High",
+            "pixel_format": "yuv420p",
+            "color_space": "bt709",
+            "audio_sample_rate": 48000,
             "test_mode": False,
         }
         record.update({"background": self.selection, "render": self.render})
@@ -88,7 +92,7 @@ class ResultReceiptTests(unittest.TestCase):
 
     def test_complete_measured_provenance(self):
         receipt = self.build()
-        self.assertEqual(receipt["schema_version"], 3)
+        self.assertEqual(receipt["schema_version"], 4)
         self.assertEqual(receipt["video_seconds"], 151.0)
         self.assertEqual(receipt["renderer_source_commit"], "b" * 40)
         self.assertEqual(receipt["verification_source_commit"], "d" * 40)

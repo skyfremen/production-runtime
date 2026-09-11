@@ -2,13 +2,15 @@
 
 The immutable request decides *which* logical primary and backup may be used.
 This module only chooses and downloads a physical rendition of those IDs.
-Production is intentionally capped at a 1080p-equivalent source budget so a 4K
-provider file is never downloaded just to render a 720x1280 Short.
+Selection is based on effective resolution after the required vertical crop.
 """
 
 import argparse
+import fcntl
 import hashlib
 import json
+import os
+import shutil
 import subprocess
 import time
 import urllib.error
@@ -20,9 +22,11 @@ from resources.policy import (
     TARGET_FPS,
     TARGET_HEIGHT,
     TARGET_WIDTH,
+    crop_fill_geometry,
     rendition_is_production_suitable,
     rendition_sort_key,
 )
+from resources.quality import analyze_caption_region
 from resources.validate import load_registry, validate_request_backgrounds
 from base.contract import OUTPUT_DIR, atomic_write_json, load_json
 
@@ -214,17 +218,43 @@ def normalize_for_render(target, source_probe, target_width=TARGET_WIDTH, target
     }
 
 
-def download(asset, rendition, target, target_width=TARGET_WIDTH, target_height=TARGET_HEIGHT):
-    # Fail before network I/O if a caller somehow passes an oversized/UHD rendition.
+def download(asset, rendition, target, target_width=TARGET_WIDTH, target_height=TARGET_HEIGHT,
+             segment_duration_seconds=175):
+    # Fail before network I/O if the effective post-crop resolution is inadequate.
     if not rendition_is_production_suitable(
         rendition, target_width=target_width, target_height=target_height
     ):
         raise RuntimeError(
-            f"rendition {rendition.get('id')} is outside the production source budget"
+            f"rendition {rendition.get('id')} cannot meet the post-crop quality floor"
         )
 
     target = Path(target)
     target.parent.mkdir(parents=True, exist_ok=True)
+    cache_root = Path(os.getenv("RUNTIME_RESOURCE_CACHE", "/tmp/runtime-resource-cache"))
+    cache_root.mkdir(parents=True, exist_ok=True)
+    cache_identity = json.dumps(
+        [asset.get("id"), rendition.get("id"), rendition.get("direct_url"),
+         target_width, target_height, TARGET_FPS], separators=(",", ":")
+    )
+    cache_key = hashlib.sha256(cache_identity.encode("utf-8")).hexdigest()
+    cache_video = cache_root / f"{cache_key}.mp4"
+    cache_meta = cache_root / f"{cache_key}.json"
+    lock_path = cache_root / f"{cache_key}.lock"
+    lock = lock_path.open("a+b")
+    fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+    if cache_video.exists() and cache_meta.exists() and cache_video.stat().st_size >= 10000:
+        cached_probe = probe_video(cache_video)
+        if not normalization_required(cached_probe, target_width, target_height, TARGET_FPS):
+            shutil.copy2(cache_video, target)
+            cached = json.loads(cache_meta.read_text(encoding="utf-8"))
+            cached.update({
+                "background_cache_hit": True,
+                "background_cache_key": cache_key,
+                "render_background_bytes": target.stat().st_size,
+                "render_background_sha256": sha256_file(target),
+            })
+            lock.close()
+            return cached
     started = time.monotonic()
     last_error = None
     for attempt in range(1, 4):
@@ -258,22 +288,41 @@ def download(asset, rendition, target, target_width=TARGET_WIDTH, target_height=
         target_height=target_height,
     ):
         raise RuntimeError(
-            f"downloaded rendition {probe['width']}x{probe['height']} is outside the production source budget"
+            f"downloaded rendition {probe['width']}x{probe['height']} cannot meet the post-crop quality floor"
         )
     source_bytes = target.stat().st_size
     source_sha256 = sha256_file(target)
+    readability = analyze_caption_region(
+        target, segment_duration_seconds, asset.get("caption_readability_score")
+    )
+    geometry = crop_fill_geometry(
+        probe["width"], probe["height"], target_width, target_height
+    )
     normalization = normalize_for_render(
         target, probe, target_width, target_height, TARGET_FPS
     )
-    return {
+    result = {
         "downloaded_bytes": source_bytes,
         "download_duration_seconds": elapsed,
         "background_sha256": source_sha256,
         "render_background_bytes": target.stat().st_size,
         "render_background_sha256": sha256_file(target),
         "source_probe": probe,
+        "effective_crop_width": round(geometry["effective_crop_width"], 3),
+        "effective_crop_height": round(geometry["effective_crop_height"], 3),
+        "upscale_factor": round(geometry["scale_factor"], 6),
+        "significant_upscaling_used": geometry["scale_factor"] > 1.05,
+        "readability": readability,
+        "background_cache_hit": False,
+        "background_cache_key": cache_key,
         **normalization,
     }
+    cache_tmp = cache_root / f"{cache_key}.{os.getpid()}.tmp"
+    shutil.copy2(target, cache_tmp)
+    cache_tmp.replace(cache_video)
+    atomic_write_json(cache_meta, result)
+    lock.close()
+    return result
 
 
 def resolve(request_path, registry_path=None, do_download=True, do_preflight=True):
@@ -294,7 +343,7 @@ def resolve(request_path, registry_path=None, do_download=True, do_preflight=Tru
             candidates.append((fallback, True))
         if not candidates:
             failures.append(
-                f"{selection} {asset['id']}: no production-suitable <=1080p rendition"
+                f"{selection} {asset['id']}: no rendition meets the post-crop 1080x1920 quality floor"
             )
             continue
         physical_failures = 0
@@ -320,6 +369,7 @@ def resolve(request_path, registry_path=None, do_download=True, do_preflight=Tru
                         OUTPUT_DIR / "background.asset",
                         target["width"],
                         target["height"],
+                        request.get("planning", {}).get("target_duration_seconds", 175),
                     )
                 except (subprocess.CalledProcessError, RuntimeError) as exc:
                     failures.append(
@@ -359,6 +409,7 @@ def resolve(request_path, registry_path=None, do_download=True, do_preflight=Tru
                 "rendition_fallback_used": physical_failures > 0,
                 "logical_fallback_used": selection == "backup",
                 "generic_source_fallback_used": is_generic,
+                "readability": metrics.get("readability"),
                 "preflight": detail,
                 "failures_before_selection": list(failures),
                 "metrics": {

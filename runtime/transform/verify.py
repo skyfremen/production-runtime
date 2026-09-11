@@ -75,7 +75,7 @@ def main():
             "-v",
             "error",
             "-show_entries",
-            "format=duration,size:stream=codec_type,codec_name,width,height,r_frame_rate",
+            "format=duration,size:stream=codec_type,codec_name,width,height,r_frame_rate,profile,pix_fmt,color_space,color_transfer,color_primaries,sample_rate,profile",
             "-of",
             "json",
             str(video),
@@ -123,11 +123,20 @@ def main():
             "Render verification failed: video codec must be h264, got "
             f"{video_stream.get('codec_name')}"
         )
+    if str(video_stream.get("profile", "")).lower() != "high":
+        raise SystemExit("Render verification failed: H.264 profile must be High")
+    if video_stream.get("pix_fmt") != "yuv420p":
+        raise SystemExit("Render verification failed: pixel format must be yuv420p")
+    for field in ("color_space", "color_transfer", "color_primaries"):
+        if video_stream.get(field) != "bt709":
+            raise SystemExit(f"Render verification failed: {field} must be bt709")
     if audios[0].get("codec_name") != "aac":
         raise SystemExit(
             "Render verification failed: audio codec must be aac, got "
             f"{audios[0].get('codec_name')}"
         )
+    if int(audios[0].get("sample_rate") or 0) != 48000:
+        raise SystemExit("Render verification failed: audio sample rate must be 48000 Hz")
 
     duration = float(info.get("format", {}).get("duration") or 0)
     test_mode = env_bool("STORY_TEST_MODE", False)
@@ -189,9 +198,13 @@ def main():
             "video_codec": video_stream["codec_name"],
             "audio_codec": audios[0]["codec_name"],
             "audio_stream_count": len(audios),
+            "h264_profile": video_stream.get("profile"),
+            "pixel_format": video_stream.get("pix_fmt"),
+            "color_space": video_stream.get("color_space"),
+            "audio_sample_rate": int(audios[0].get("sample_rate") or 0),
             "video_stream_count": len(videos),
             "narration_engine": request["narration"]["engine"],
-            "audio_source": "narration.wav only (input 3:a:0)",
+            "audio_source": "narration.wav only (input 4:a:0)",
             "video_sha256": hashlib.sha256(video.read_bytes()).hexdigest(),
         }
     )
@@ -205,4 +218,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

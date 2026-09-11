@@ -48,7 +48,7 @@ def synthetic_request(index):
     title = f"Story {index + 1:02}: The Backup Exposed What Really Happened #Shorts"
     publish_at = (FIXTURE_START_UTC + timedelta(hours=index)).strftime("%Y-%m-%dT%H:%M:%SZ")
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "content_id": content_id,
         "channel": {"name": "Wa" + "cky" + " Dramas", "handle": "@WA" + "CKY" + "DRAMAS"},
         "story": {
@@ -60,8 +60,10 @@ def synthetic_request(index):
                 "I opened the archived workspace and found the timestamped backup."
             ),
             "card_emojis": ["💼", "🗂️", "😳", "💾", "🔥"],
+            "lead_gender": "female",
+            "story_tone": "dramatic",
         },
-        "narration": {"engine": "kokoro", "voice": "af_heart", "speed": 1.75},
+        "narration": {"engine": "kokoro", "voice": "af_bella", "speed": 1.75},
         "visual": {
             "background_primary_id": "satisfying-001",
             "background_backup_id": "satisfying-002",
@@ -253,7 +255,7 @@ def validate_production_shaped_batch(root):
 
         simulated_receipts.append(
             {
-                "schema_version": 3,
+                "schema_version": payload["schema_version"],
                 **simulated_publication,
                 "receipt_simulated": True,
             }
@@ -321,7 +323,7 @@ def _make_background(path):
             "-f",
             "lavfi",
             "-i",
-            "color=c=0x355070:s=720x1280:r=30:d=4.2",
+            "color=c=0x355070:s=1080x1920:r=30:d=4.2",
             "-an",
             "-c:v",
             "libx264",
@@ -374,15 +376,15 @@ def _validate_template_contract(smoke_dir):
         if image.size != expected_size:
             raise AssertionError(f"{label} changed production dimensions: {image.size}")
 
-    if render.CAPTION_MARGIN_X != 85:
-        raise AssertionError(f"Caption safe margin changed from 85px: {render.CAPTION_MARGIN_X}")
+    if render.CAPTION_MARGIN_X != 128:
+        raise AssertionError(f"Caption safe margin changed from 128px: {render.CAPTION_MARGIN_X}")
     if render.CAPTION_MAX_WIDTH != render.VIDEO_WIDTH - 2 * render.CAPTION_MARGIN_X:
         raise AssertionError("Caption maximum width no longer derives symmetrically from the safe margins")
-    if render.CARD_BOX != (37, 157, 683, 537):
+    if render.CARD_BOX != (56, 236, 1024, 806):
         raise AssertionError(f"Opening card bounds changed unexpectedly: {render.CARD_BOX}")
-    if render.HANDLE_PILL != (190, 840, 530, 889):
+    if render.HANDLE_PILL != (285, 1260, 795, 1334):
         raise AssertionError(f"Handle pill bounds changed unexpectedly: {render.HANDLE_PILL}")
-    if render.SUBSCRIBE_PILL != (240, 899, 480, 945):
+    if render.SUBSCRIBE_PILL != (360, 1349, 720, 1418):
         raise AssertionError(f"Subscribe pill bounds changed unexpectedly: {render.SUBSCRIBE_PILL}")
 
     card_alpha = ImageStat.Stat(card.crop(render.CARD_BOX).getchannel("A")).mean[0]
@@ -413,7 +415,7 @@ def _validate_template_contract(smoke_dir):
             f"(early={early_card_mean:.1f}, story={story_card_mean:.1f})"
         )
 
-    story_y1, story_y2 = 500, 780
+    story_y1, story_y2 = 750, 1170
     bright = []
     pixels = story.load()
     for y in range(story_y1, story_y2):
@@ -497,8 +499,8 @@ def render_smoke(request_path, root):
             {
                 "STORY_TEST_MODE": "true",
                 "STORY_RENDER_MAX_SECONDS": "5",
-                "VIDEO_WIDTH": "720",
-                "VIDEO_HEIGHT": "1280",
+                "VIDEO_WIDTH": "1080",
+                "VIDEO_HEIGHT": "1920",
                 "VIDEO_FPS": "30",
             }
         )
@@ -533,8 +535,8 @@ def render_smoke(request_path, root):
             "STORY_OUTPUT_DIR": str(smoke_dir),
             "STORY_TEST_MODE": "true",
             "STORY_RENDER_MAX_SECONDS": "5",
-            "VIDEO_WIDTH": "720",
-            "VIDEO_HEIGHT": "1280",
+            "VIDEO_WIDTH": "1080",
+            "VIDEO_HEIGHT": "1920",
             "VIDEO_FPS": "30",
         }
     )

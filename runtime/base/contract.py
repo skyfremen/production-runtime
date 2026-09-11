@@ -79,8 +79,7 @@ def env_bool(name, default=False):
 
 def expected_video_config():
     return {
-        "width": int(os.getenv("VIDEO_WIDTH", "720")),
-        "height": int(os.getenv("VIDEO_HEIGHT", "1280")),
+        "width": int(os.getenv("VIDEO_WIDTH", "1080")),
+        "height": int(os.getenv("VIDEO_HEIGHT", "1920")),
         "fps": int(os.getenv("VIDEO_FPS", "30")),
     }
-

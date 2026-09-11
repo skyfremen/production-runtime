@@ -33,7 +33,7 @@ def write_synthetic_registry():
             "caption_readability_score": 90, "has_embedded_text": False,
             "has_watermark": False,
             "renditions": [{
-                "id": "synthetic", "width": 720, "height": 1280, "fps": 30,
+                "id": "synthetic", "width": 1080, "height": 1920, "fps": 30,
                 "file_type": "video/mp4",
                 "direct_url": f"https://example.invalid/video-{number}.mp4",
             }],

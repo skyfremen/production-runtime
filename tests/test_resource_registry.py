@@ -82,14 +82,13 @@ class MediaRegistryTests(unittest.TestCase):
         data["assets"].append(sourced)
         self.assertEqual(validate_registry_data(data), [])
 
-    def test_registry_rejects_4k_only_active_asset_for_production(self):
+    def test_registry_allows_4k_landscape_when_vertical_crop_requires_it(self):
         data = registry()
         data["assets"][0]["renditions"] = [{
             "id": "4k", "width": 3840, "height": 2160, "fps": 30,
             "file_type": "video/mp4", "direct_url": "https://videos.pexels.com/4k-only.mp4",
         }]
-        errors = validate_registry_data(data)
-        self.assertTrue(any("<=1080p production rendition" in x for x in errors))
+        self.assertEqual(validate_registry_data(data), [])
 
 
 if __name__ == "__main__":
