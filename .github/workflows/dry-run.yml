@@ -28,14 +28,9 @@ jobs:
   dry-run:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    container:
-      image: ghcr.io/skyfremen/runtime-base@sha256:6ab68475deb3f0c3e531ff2913da283ceb7e682572acdbd1bff14709b07ffdca
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
     env:
-      PYTHONPATH: runtime
-      RUNTIME_COMMIT_SHA: ${{ github.sha }}
+      RUNTIME_IMAGE: ghcr.io/skyfremen/runtime-base@sha256:6ab68475deb3f0c3e531ff2913da283ceb7e682572acdbd1bff14709b07ffdca
+      CHECK_TMP: /tmp/runtime-dry-run
     steps:
       - name: Source
         shell: bash
@@ -50,9 +45,20 @@ jobs:
             --strip-components 1 --directory "${GITHUB_WORKSPACE}"
 
       - name: Compile
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          if ! find base runtime tests -type f -name '*.py' -print0 | xargs -0 python -m py_compile; then
+          mkdir -p "${CHECK_TMP}"
+          if ! printf '%s' "${GH_TOKEN}" | docker login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin >/dev/null; then
+            echo "::error::E_TEST_IMAGE Unable to load the pinned validation environment"
+            exit 1
+          fi
+          if ! docker run --rm \
+            --volume "${GITHUB_WORKSPACE}:/workspace" --workdir /workspace \
+            --env PYTHONPATH=runtime --env RUNTIME_COMMIT_SHA="${GITHUB_SHA}" \
+            "${RUNTIME_IMAGE}" bash -lc \
+            "find base runtime tests -type f -name '*.py' -print0 | xargs -0 python -m py_compile"; then
             echo "::error::E_TEST_COMPILE Python compilation failed"
             exit 1
           fi
@@ -60,7 +66,10 @@ jobs:
       - name: Test
         shell: bash
         run: |
-          if ! python -m unittest discover -s tests -v; then
+          if ! docker run --rm \
+            --volume "${GITHUB_WORKSPACE}:/workspace" --workdir /workspace \
+            --env PYTHONPATH=runtime --env RUNTIME_COMMIT_SHA="${GITHUB_SHA}" \
+            "${RUNTIME_IMAGE}" python -m unittest discover -s tests -v; then
             echo "::error::E_TEST_UNIT Runtime unit tests failed"
             exit 1
           fi
@@ -68,27 +77,33 @@ jobs:
       - name: Exercise
         shell: bash
         run: |
-          if python runtime/exercise.py > /tmp/runtime-exercise.log 2>&1; then
+          if docker run --rm \
+            --volume "${GITHUB_WORKSPACE}:/workspace" --workdir /workspace \
+            --volume "${CHECK_TMP}:/tmp" \
+            --env PYTHONPATH=runtime --env RUNTIME_COMMIT_SHA="${GITHUB_SHA}" \
+            "${RUNTIME_IMAGE}" python runtime/exercise.py \
+            > "${CHECK_TMP}/runtime-exercise.log" 2>&1; then
             echo "Exercise PASS"
           else
-            stage="$(sed -n '1p' /tmp/runtime-check-stage 2>/dev/null || true)"
+            stage="$(sed -n '1p' "${CHECK_TMP}/runtime-check-stage" 2>/dev/null || true)"
             case "${stage}" in
               s01|s02|s02a|s02b|s02c|s02d|s02e|s02f|s02g|s02h|s02i|s02j|s02k|s02l|s02m|s02n|s02x|s03|s04)
                 ;;
               *) stage="unknown" ;;
             esac
             echo "::error::E_MEDIA_EXERCISE stage=${stage}"
-            tail -n 80 /tmp/runtime-exercise.log
+            tail -n 80 "${CHECK_TMP}/runtime-exercise.log"
             exit 1
           fi
 
       - name: Side-effect boundary
         shell: bash
         run: |
-          if [ -e /tmp/runtime-public-summary.json ] || \
-             [ -e /tmp/runtime-diagnostic.json ] || \
-             [ -e /tmp/runtime-observation.json ]; then
+          if [ -e "${CHECK_TMP}/runtime-public-summary.json" ] || \
+             [ -e "${CHECK_TMP}/runtime-diagnostic.json" ] || \
+             [ -e "${CHECK_TMP}/runtime-observation.json" ]; then
             echo "::error::E_ARCH_SIDE_EFFECT Dry run produced a state artifact"
             exit 1
           fi
+          docker logout ghcr.io >/dev/null 2>&1 || true
           echo "Boundary PASS"
