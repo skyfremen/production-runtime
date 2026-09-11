@@ -95,6 +95,13 @@ def main():
         text = "The backup proved it."
         synth = OnnxKokoroSynthesizer()
         audio, segments, _audio_metrics = synth.synthesize(text, "af_heart", 1.75)
+        approved_voices = ("af_heart", "af_bella", "am_echo", "am_fenrir")
+        for approved_voice in approved_voices:
+            probe_audio, _probe_segments, _probe_metrics = synth.synthesize(
+                "The result was clear.", approved_voice, 1.75
+            )
+            if len(probe_audio) < 2400:
+                raise RuntimeError("Approved narration resource validation failed")
         narration = root / "model-check.wav"
         sf.write(narration, audio, SAMPLE_RATE, subtype="PCM_16")
         phase("s04")
@@ -115,6 +122,7 @@ def main():
             "tts_backend": synth.backend,
             "tts_voice": "af_heart",
             "tts_speed": 1.75,
+            "approved_voice_count": len(approved_voices),
             "tts_init_seconds": synth.init_seconds,
             "alignment_backend": alignment["caption_alignment_backend"],
             "alignment_coverage": alignment["caption_alignment_coverage"],
