@@ -53,12 +53,17 @@ def scheduled_slot_guard(
     now_utc=None,
     buffer_minutes=SCHEDULE_FRESHNESS_BUFFER_MINUTES,
 ):
-    """Skip fresh generation for a scheduled slot that is past or too close."""
+    """Apply freshness protection to scheduled requests; immediate requests proceed."""
     publication = request.get("publication")
     if not isinstance(publication, dict):
-        raise RecoveryBlocked("Scheduled publication contract is required")
-    if publication.get("mode") != "scheduled":
-        raise RecoveryBlocked("publication.mode must be scheduled")
+        raise RecoveryBlocked("Publication contract is required")
+    mode = publication.get("mode")
+    if mode == "immediate":
+        if publication.get("publish_at") is not None:
+            raise RecoveryBlocked("Immediate publication requires publish_at=null")
+        return {"skip": False, "reason": None, "remaining_seconds": None}
+    if mode != "scheduled":
+        raise RecoveryBlocked("publication.mode must be scheduled or immediate")
     raw = str(publication.get("publish_at", ""))
     if not raw.endswith("Z"):
         raise RecoveryBlocked("Scheduled publish_at must be UTC RFC3339 ending Z")
