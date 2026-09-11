@@ -8,6 +8,12 @@ on:
       - 'base/**'
       - 'runtime/**'
       - 'tests/**'
+  pull_request:
+    paths:
+      - '.github/workflows/**'
+      - 'base/**'
+      - 'runtime/**'
+      - 'tests/**'
   workflow_dispatch:
 
 concurrency:

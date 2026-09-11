@@ -103,6 +103,7 @@ class BoundaryTests(unittest.TestCase):
         dry_trigger = dry.split("on:", 1)[1].split("concurrency:", 1)[0]
         observe_trigger = observe.split("on:", 1)[1].split("concurrency:", 1)[0]
         self.assertIn("push:", dry_trigger)
+        self.assertIn("pull_request:", dry_trigger)
         self.assertIn("workflow_dispatch:", dry_trigger)
         self.assertNotIn("schedule:", dry_trigger)
         self.assertIn("cron: '30 5,11,17,23 * * *'", observe_trigger)
