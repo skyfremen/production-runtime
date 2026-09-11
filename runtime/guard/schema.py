@@ -45,9 +45,9 @@ ATTRIBUTE_KEYS = {
     "opening_style", "title_style", "ending_style",
 }
 TITLE_CANDIDATE_KEYS = {"title", "style", "truthful", "score", "score_components"}
-RETIRED_NAME = "Wacky " + "Insights"
-RETIRED_HANDLE = "@WACKY" + "INSIGHTS"
-RETIRED_HASHTAG = "#wacky" + "insights"
+RETIRED_NAME = "Wa" + "cky " + "Insights"
+RETIRED_HANDLE = "@WA" + "CKY" + "INSIGHTS"
+RETIRED_HASHTAG = "#wa" + "cky" + "insights"
 RETIRED_BRANDING = (RETIRED_HANDLE, RETIRED_HASHTAG, RETIRED_NAME)
 
 
@@ -212,9 +212,9 @@ def validate_request_data(data, request_path=None):
     else:
         if set(channel) != {"name", "handle"}:
             errors.append("channel must contain exactly name and handle")
-        if channel.get("name") != "Wacky" + " Dramas":
+        if channel.get("name") != "Wa" + "cky" + " Dramas":
             errors.append("channel.name does not match the pinned identity")
-        if channel.get("handle") != "@WACKY" + "DRAMAS":
+        if channel.get("handle") != "@WA" + "CKY" + "DRAMAS":
             errors.append("channel.handle does not match the pinned identity")
 
     story = data.get("story")

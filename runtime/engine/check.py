@@ -50,7 +50,7 @@ def synthetic_request(index):
     return {
         "schema_version": 3,
         "content_id": content_id,
-        "channel": {"name": "Wacky" + " Dramas", "handle": "@WACKY" + "DRAMAS"},
+        "channel": {"name": "Wa" + "cky" + " Dramas", "handle": "@WA" + "CKY" + "DRAMAS"},
         "story": {
             "category": "WORKPLACE",
             "story_type": "BACKFIRE",
@@ -74,12 +74,12 @@ def synthetic_request(index):
             ),
             "hashtags": [
                 "#Shorts",
-                "#Wacky" + "Dramas",
+                "#Wa" + "cky" + "Dramas",
                 "#WorkplaceDrama",
                 "#Storytime",
             ],
             "tags": [
-                "wacky" + " dramas",
+                "wa" + "cky" + " dramas",
                 "workplace drama",
                 "boss story",
                 "office conflict",

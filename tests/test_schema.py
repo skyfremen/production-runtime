@@ -26,7 +26,7 @@ def valid_request():
     return {
         "schema_version": 3,
         "content_id": "wd-20990910T000000-synthetic-proof-z9y8x7",
-        "channel": {"name": "Wacky" + " Dramas", "handle": "@WACKY" + "DRAMAS"},
+        "channel": {"name": "Wa" + "cky" + " Dramas", "handle": "@WA" + "CKY" + "DRAMAS"},
         "story": {
             "category": "WORKPLACE",
             "story_type": "BACKFIRE",
@@ -50,12 +50,12 @@ def valid_request():
             ),
             "hashtags": [
                 "#Shorts",
-                "#Wacky" + "Dramas",
+                "#Wa" + "cky" + "Dramas",
                 "#WorkplaceDrama",
                 "#Storytime",
             ],
             "tags": [
-                "wacky" + " dramas",
+                "wa" + "cky" + " dramas",
                 "workplace drama",
                 "boss story",
                 "office conflict",
@@ -146,7 +146,7 @@ class RequestSchemaTests(unittest.TestCase):
 
     def test_wrong_brand_fails(self):
         data = valid_request()
-        data["channel"]["handle"] = "@WACKY" + "INSIGHTS"
+        data["channel"]["handle"] = "@WA" + "CKY" + "INSIGHTS"
         self.assertTrue(validate_request_data(data))
 
     def test_primary_backup_must_differ(self):

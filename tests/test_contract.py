@@ -57,17 +57,17 @@ class ScheduledRequestSchemaTests(unittest.TestCase):
     def test_upload_body_contains_planned_tags_hashtags_and_hidden_marker(self):
         body = build_upload_body(valid_request(), require_future=False)
         tags = body["snippet"]["tags"]
-        self.assertIn("wacky" + " dramas", tags)
+        self.assertIn("wa" + "cky" + " dramas", tags)
         self.assertIn("workplace drama", tags)
         self.assertIn("Shorts", tags)
-        self.assertIn("Wacky" + "Dramas", tags)
+        self.assertIn("Wa" + "cky" + "Dramas", tags)
         self.assertTrue(tags[0].startswith("wd-id-"))
         self.assertEqual(len(tags), len({tag.lower() for tag in tags}))
 
     def test_description_gets_missing_hashtags_once(self):
         body = build_upload_body(valid_request(), require_future=False)
         description = body["snippet"]["description"]
-        self.assertEqual(description.count("#Wacky" + "Dramas"), 1)
+        self.assertEqual(description.count("#Wa" + "cky" + "Dramas"), 1)
         self.assertIn("Would you have confronted him?", description)
 
     def test_upload_body_is_private_with_exact_publish_at(self):

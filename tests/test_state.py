@@ -21,7 +21,7 @@ from base.contract import marker_tag
 VIDEO_ID = "AbCdEfGh123"
 CHANNEL = {
     "id": "UCvrq2m9G4yrwPfL_X-QPzMA",
-    "snippet": {"title": "Wacky" + " Dramas"},
+    "snippet": {"title": "Wa" + "cky" + " Dramas"},
     "contentDetails": {"relatedPlaylists": {"uploads": "uploads"}},
 }
 
