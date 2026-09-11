@@ -12,7 +12,11 @@ class ErrorModelTests(unittest.TestCase):
     def test_execution_failure_is_publicly_generic_and_privately_detailed(self):
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "diagnostic.json"
-            with patch.object(core, "DIAGNOSTIC", target):
+            internal = Path(tmp) / "internal.log"
+            internal.write_text("underlying private failure\n", encoding="utf-8")
+            with patch.object(core, "DIAGNOSTIC", target), patch.object(
+                core, "INTERNAL_LOG", internal
+            ):
                 try:
                     raise core.RunnerError("owner-only detail")
                 except core.RunnerError as exc:
@@ -21,6 +25,7 @@ class ErrorModelTests(unittest.TestCase):
         self.assertEqual(code, "E_EXEC_001")
         self.assertEqual(payload["error_code"], code)
         self.assertIn("owner-only detail", payload["detail"])
+        self.assertIn("underlying private failure", payload["detail"])
         self.assertTrue(payload["execution_started"])
         self.assertFalse(payload["verification_completed"])
 

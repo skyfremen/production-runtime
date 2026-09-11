@@ -19,6 +19,7 @@ PUBLIC_SUMMARY = Path("/tmp/runtime-public-summary.json")
 PENDING = Path("/tmp/batch-pending-verification.txt")
 INTERNAL_LOG = Path("/tmp/runtime-internal.log")
 DIAGNOSTIC = Path("/tmp/runtime-diagnostic.json")
+PRIVATE_DETAIL_LIMIT = 32_000
 
 
 class RunnerError(RuntimeError):
@@ -137,6 +138,14 @@ def main():
 
 
 def record_failure(exc):
+    internal_detail = ""
+    if INTERNAL_LOG.exists():
+        internal_detail = INTERNAL_LOG.read_text(
+            encoding="utf-8", errors="replace"
+        )[-PRIVATE_DETAIL_LIMIT:]
+    detail = traceback.format_exc()
+    if internal_detail:
+        detail += "\nPrivate internal detail:\n" + internal_detail
     DIAGNOSTIC.write_text(json.dumps({
         "schema_version": 1,
         "stage": "execute",
@@ -144,7 +153,7 @@ def record_failure(exc):
         "retryable": isinstance(exc, (OSError, RunnerError)),
         "execution_started": True,
         "verification_completed": False,
-        "detail": traceback.format_exc(),
+        "detail": detail,
     }, sort_keys=True) + "\n", encoding="utf-8")
     return E_EXEC
 
