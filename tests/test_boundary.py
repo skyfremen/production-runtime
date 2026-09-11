@@ -9,16 +9,18 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 RUN = ROOT / ".github/workflows/run.yml"
 CHECK = ROOT / ".github/workflows/check.yml"
+SINGLE = ROOT / ".github/workflows/single.yml"
 
 
 class BoundaryTests(unittest.TestCase):
     def test_normal_dispatch_has_only_opaque_contract(self):
-        text = RUN.read_text()
-        block = text.split("inputs:", 1)[1].split("concurrency:", 1)[0]
-        self.assertIn("batch_id:", block)
-        self.assertIn("source_sha:", block)
-        for forbidden in ("content_ids:", "request:", "story:", "title:", "schedule:"):
-            self.assertNotIn(forbidden, block)
+        for workflow in (RUN, SINGLE):
+            text = workflow.read_text()
+            block = text.split("inputs:", 1)[1].split("concurrency:", 1)[0]
+            self.assertIn("batch_id:", block)
+            self.assertIn("source_sha:", block)
+            for forbidden in ("content_ids:", "request:", "story:", "title:", "schedule:"):
+                self.assertNotIn(forbidden, block)
 
     def test_trigger_and_permissions_are_read_only(self):
         text = RUN.read_text()
@@ -112,7 +114,7 @@ class BoundaryTests(unittest.TestCase):
 
     def test_workflow_display_labels_are_generic(self):
         visible = []
-        for workflow in (RUN, CHECK):
+        for workflow in (RUN, SINGLE, CHECK):
             for line in workflow.read_text().splitlines():
                 stripped = line.strip()
                 if stripped.startswith("name:") or stripped.startswith("- name:") or "echo \"" in stripped:
@@ -181,6 +183,14 @@ class BoundaryTests(unittest.TestCase):
         self.assertNotIn("transport.py complete", units)
         self.assertNotIn("transport.py diagnose", units)
         self.assertIn("--no-persist-registry", units)
+
+    def test_one_item_path_is_exactly_one_job_at_concurrency_one(self):
+        workflow = SINGLE.read_text()
+        jobs = workflow.split("jobs:\n", 1)[1]
+        self.assertEqual(len(re.findall(r"^  [a-z][a-z0-9_-]*:\n", jobs, re.MULTILINE)), 1)
+        self.assertIn("--profile single --shard-index 0 --concurrency 1", workflow)
+        self.assertNotIn("matrix:", workflow)
+        self.assertNotIn("upload-artifact", workflow)
 
 
 if __name__ == "__main__":

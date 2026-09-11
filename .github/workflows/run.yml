@@ -6,12 +6,6 @@ on:
       batch_id: {description: Opaque identifier, required: true, type: string}
       source_sha: {description: Exact source revision, required: true, type: string}
       contract_hash: {description: Compatibility fingerprint, required: true, type: string}
-      profile:
-        description: Bounded execution profile
-        required: false
-        default: paired
-        type: choice
-        options: [paired, single]
 
 concurrency:
   group: run-${{ inputs.batch_id }}
@@ -72,7 +66,7 @@ jobs:
         id: plan
         run: >-
           python runtime/engine/shard.py --manifest /tmp/runtime-batch.json
-          --profile "${{ inputs.profile }}"
+          --profile paired
 
   units:
     needs: prepare
@@ -108,7 +102,7 @@ jobs:
         continue-on-error: true
         run: >-
           python runtime/core.py --manifest /tmp/runtime-batch.json
-          --profile "${{ inputs.profile }}" --shard-index "${{ matrix.index }}"
+          --profile paired --shard-index "${{ matrix.index }}"
           --concurrency "${{ needs.prepare.outputs.concurrency }}" --no-persist-registry
       - name: Export
         if: ${{ always() }}
@@ -156,7 +150,7 @@ jobs:
         continue-on-error: true
         run: >-
           python runtime/engine/aggregate.py --manifest /tmp/runtime-batch.json
-          --results /tmp/unit-results --profile "${{ inputs.profile }}"
+          --results /tmp/unit-results --profile paired
       - name: Finalize
         id: completion
         if: ${{ always() }}
