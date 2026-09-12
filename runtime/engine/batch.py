@@ -8,6 +8,7 @@ from pathlib import Path
 REQUEST_PREFIX = "runtime/content/requests/"
 PLANNING_PREFIX = "runtime/content/planning/"
 SOURCING_PREFIX = "runtime/content/background-sourcing/"
+BACKGROUND_ID_KEYS = ("background_primary_id", "background_backup_id")
 
 
 class BatchError(RuntimeError):
@@ -34,6 +35,17 @@ def _read_json(path):
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
+def _background_ids(data):
+    visual = data.get("visual") if isinstance(data, dict) else None
+    if not isinstance(visual, dict):
+        return ()
+    return tuple(
+        value.strip()
+        for key in BACKGROUND_ID_KEYS
+        if isinstance((value := visual.get(key)), str) and value.strip()
+    )
+
+
 def _validate_planning_and_sourcing(requests, planning, sourcing):
     if not 1 <= len(requests) <= 24:
         raise BatchError(f"Daily planning commit must add 1-24 requests; got {len(requests)}")
@@ -58,21 +70,38 @@ def _validate_planning_and_sourcing(requests, planning, sourcing):
             Path(path).stem: _read_json(path) for path in requests
         }
         referenced = {
-            value
+            logical_id
             for data in request_by_id.values()
-            for value in (data.get("visual") or {}).values()
+            for logical_id in _background_ids(data)
         }
-        for item in source_payload.get("candidates") or []:
+        candidates = source_payload.get("candidates")
+        if not isinstance(candidates, list) or not candidates:
+            raise BatchError("Background sourcing candidates must be a non-empty array")
+        for index, item in enumerate(candidates):
+            if not isinstance(item, dict):
+                raise BatchError(f"Background sourcing candidate {index} must be an object")
             logical_id = item.get("logical_id")
-            required_by = set(item.get("required_by_content_ids") or [])
+            required_raw = item.get("required_by_content_ids")
+            if not isinstance(logical_id, str) or not logical_id.strip():
+                raise BatchError(f"Background sourcing candidate {index} has invalid logical_id")
+            logical_id = logical_id.strip()
+            if (
+                not isinstance(required_raw, list)
+                or not required_raw
+                or any(not isinstance(value, str) or not value for value in required_raw)
+            ):
+                raise BatchError(
+                    f"Invalid required_by_content_ids for sourced background {logical_id}"
+                )
+            required_by = set(required_raw)
             if logical_id not in referenced:
                 raise BatchError(f"Unreferenced sourced background in content commit: {logical_id}")
-            if not required_by or not required_by <= actual:
+            if not required_by <= actual:
                 raise BatchError(
                     f"Invalid required_by_content_ids for sourced background {logical_id}"
                 )
             for content_id in required_by:
-                visuals = set((request_by_id[content_id].get("visual") or {}).values())
+                visuals = set(_background_ids(request_by_id[content_id]))
                 if logical_id not in visuals:
                     raise BatchError(
                         f"Sourcing manifest says {content_id} needs {logical_id}, "
@@ -130,7 +159,7 @@ def resolve_manual_batch(content_ids, *, cwd="."):
             data = _read_json(path)
         except Exception:
             continue
-        needed.update((data.get("visual") or {}).values())
+        needed.update(_background_ids(data))
 
     source_dir = Path(SOURCING_PREFIX.rstrip("/"))
     sourcing = []
