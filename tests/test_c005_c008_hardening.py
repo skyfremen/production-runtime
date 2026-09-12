@@ -42,6 +42,7 @@ class HardeningTests(unittest.TestCase):
             progress.ALLOWED_STAGES,
             {"prepared", "unit_started", "unit_produced", "unit_finished", "aggregate_started"},
         )
+        self.assertEqual(progress.PRODUCTION_WORKFLOWS, {"Run", "One"})
 
     def test_unexpected_exception_produces_non_retryable_execution_diagnostic(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -86,7 +87,7 @@ class HardeningTests(unittest.TestCase):
                 process.bounded_render_capture(["ffmpeg", "-version"])
 
     def _verification_fixture(self, tags):
-        content_id = "wd-marker-test"
+        content_id = "wd-20990101T000000-marker-test-a1b2c3"
         marker = verify.marker_tag(content_id)
         publish_at = "2099-01-01T00:00:00Z"
         identity = {
