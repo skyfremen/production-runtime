@@ -194,16 +194,16 @@ jobs:
         run: >-
           python runtime/transport.py fetch --batch-id "${{ inputs.batch_id }}"
           --source-sha "${{ inputs.source_sha }}" --output /tmp/runtime-batch.json
-      - name: Shared preparation
-        id: shared
-        run: python runtime/core.py --manifest /tmp/runtime-batch.json --prepare-shared
       - name: Readiness
         env:
           RUNTIME_AUTH_A: ${{ secrets.RUNTIME_AUTH_A }}
           RUNTIME_AUTH_B: ${{ secrets.RUNTIME_AUTH_B }}
           RUNTIME_AUTH_C: ${{ secrets.RUNTIME_AUTH_C }}
         run: python runtime/guard/readiness.py --manifest /tmp/runtime-batch.json
-      - name: Record readiness failure
+      - name: Shared preparation
+        id: shared
+        run: python runtime/core.py --manifest /tmp/runtime-batch.json --prepare-shared
+      - name: Record preparation failure
         if: ${{ failure() }}
         shell: bash
         run: |
@@ -290,6 +290,7 @@ jobs:
           python runtime/transport.py fetch --batch-id "${{ inputs.batch_id }}"
           --source-sha "${{ inputs.source_sha }}" --output /tmp/runtime-batch.json
       - name: Import
+        continue-on-error: true
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           pattern: unit-*
