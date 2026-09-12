@@ -22,7 +22,7 @@ class RealBackgroundTreatmentTests(unittest.TestCase):
                     "-f", "lavfi", "-i", "testsrc=size=1080x1920:rate=30",
                     "-t", "2.0", "-an", "-c:v", "libx264",
                     "-preset", "ultrafast", "-pix_fmt", "yuv420p",
-                    str(target),
+                    "-f", "mp4", str(target),
                 ],
                 capture_output=True,
                 text=True,
