@@ -2,10 +2,9 @@ name: Dry Run
 
 on:
   push:
-    branches: [main, fix/punchline-active-orange-20260912]
+    branches: [main]
     paths:
       - '.github/workflows/**'
-      - '.github/scripts/**'
       - 'base/**'
       - 'runtime/**'
       - 'tests/**'
@@ -31,7 +30,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 permissions:
-  contents: write
+  contents: read
   packages: read
 
 jobs:
@@ -43,27 +42,6 @@ jobs:
       RUNTIME_IMAGE: ghcr.io/skyfremen/runtime-base@sha256:6ab68475deb3f0c3e531ff2913da283ceb7e682572acdbd1bff14709b07ffdca
       CHECK_TMP: /tmp/runtime-dry-run
     steps:
-      - name: Checkout patch branch
-        if: ${{ github.event_name == 'push' && github.ref_name == 'fix/punchline-active-orange-20260912' && github.actor != 'github-actions[bot]' }}
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          ref: fix/punchline-active-orange-20260912
-          fetch-depth: 0
-
-      - name: Apply requested caption patch
-        if: ${{ github.event_name == 'push' && github.ref_name == 'fix/punchline-active-orange-20260912' && github.actor != 'github-actions[bot]' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          python .github/scripts/apply_caption_active_orange.py
-          python -m py_compile runtime/transform/process.py tests/test_align.py
-          git diff --check
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add runtime/transform/process.py tests/test_align.py
-          git commit -m "Use orange only for active punchline words"
-          git push origin HEAD:fix/punchline-active-orange-20260912
-
       - name: Source
         shell: bash
         run: |
