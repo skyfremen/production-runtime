@@ -1,4 +1,3 @@
-# CI policy validation marker.
 import ast
 import os
 import re
@@ -252,8 +251,12 @@ class BoundaryTests(unittest.TestCase):
         self.assertIn("max-parallel: 12", workflow)
         self.assertIn("matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}", workflow)
         self.assertEqual(workflow.count("runtime/transport.py complete"), 1)
-        self.assertEqual(workflow.count("runtime/transport.py diagnose"), 1)
+        self.assertEqual(workflow.count("runtime/transport.py diagnose"), 2)
+        prepare = workflow.split("jobs:\n", 1)[1].split("\n  units:\n", 1)[0]
         units = workflow.split("  units:\n", 1)[1].split("\n  aggregate:\n", 1)[0]
+        aggregate = workflow.split("\n  aggregate:\n", 1)[1]
+        self.assertEqual(prepare.count("runtime/transport.py diagnose"), 1)
+        self.assertEqual(aggregate.count("runtime/transport.py diagnose"), 1)
         self.assertNotIn("transport.py complete", units)
         self.assertNotIn("transport.py diagnose", units)
         self.assertIn("--no-persist-registry", units)
