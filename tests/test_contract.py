@@ -65,10 +65,11 @@ class ScheduledRequestSchemaTests(unittest.TestCase):
         self.assertEqual(len(tags), len({tag.lower() for tag in tags}))
 
     def test_description_gets_missing_hashtags_once(self):
-        body = build_upload_body(valid_request(), require_future=False)
+        data = valid_request()
+        body = build_upload_body(data, require_future=False)
         description = body["snippet"]["description"]
         self.assertEqual(description.count("#Wa" + "cky" + "Dramas"), 1)
-        self.assertIn("Would you have confronted him?", description)
+        self.assertIn(data["youtube"]["description"], description)
 
     def test_upload_body_is_private_with_exact_publish_at(self):
         data = valid_request()

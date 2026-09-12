@@ -15,6 +15,7 @@ from transform import process as production_transform
 from transform.synth import OnnxKokoroSynthesizer
 
 PHASE = Path("/tmp/runtime-check-stage")
+PREVIEW_SECONDS = "15"
 
 
 def phase(name):
@@ -52,10 +53,9 @@ def _ass_seconds(value):
     return (float(hours) * 3600.0) + (float(minutes) * 60.0) + float(seconds)
 
 
-def _first_active_caption_midpoint(ass_path):
-    active_tag = f"{{\\c{production_transform.CAPTION_ACTIVE_ASS}}}"
+def _first_caption_midpoint(ass_path, marker, label):
     for line in Path(ass_path).read_text(encoding="utf-8").splitlines():
-        if not line.startswith("Dialogue:") or active_tag not in line:
+        if not line.startswith("Dialogue:") or marker not in line:
             continue
         parts = line.split(",", 9)
         if len(parts) != 10:
@@ -64,12 +64,27 @@ def _first_active_caption_midpoint(ass_path):
         end = _ass_seconds(parts[2])
         if end > start:
             return (start + end) / 2.0
-    raise RuntimeError("Full visual preview contains no timed active-word caption event")
+    raise RuntimeError(f"Full visual preview contains no timed {label} caption event")
 
 
 def _count_pixels(image, box, predicate):
     crop = image.crop(box).convert("RGBA")
     return sum(1 for pixel in crop.getdata() if predicate(*pixel))
+
+
+def _caption_bounds(image):
+    pixels = image.convert("RGB").load()
+    points = []
+    for y in range(650, 1250):
+        for x in range(render.VIDEO_WIDTH):
+            r, g, b = pixels[x, y]
+            white = r > 205 and g > 205 and b > 205
+            accent = r > 200 and g > 105 and b < 150 and r > b + 60
+            if white or accent:
+                points.append((x, y))
+    if not points:
+        raise RuntimeError("Full visual preview contains no visible caption pixels")
+    return min(x for x, _ in points), max(x for x, _ in points)
 
 
 def _render_full_visual_preview(root, request_path):
@@ -85,6 +100,7 @@ def _render_full_visual_preview(root, request_path):
     previous_caption_events = render.caption_events
     previous_run_capture = render.run_capture
     previous_alignment_metadata = production_transform.LAST_ALIGNMENT_METADATA
+    previous_punchline = production_transform.CURRENT_PUNCHLINE
     env_keys = (
         "STORY_TEST_MODE",
         "STORY_RENDER_MAX_SECONDS",
@@ -92,20 +108,23 @@ def _render_full_visual_preview(root, request_path):
         "VIDEO_HEIGHT",
         "VIDEO_FPS",
         "CAPTION_WORD_HIGHLIGHT_ENABLED",
+        "CAPTION_SEMANTIC_EMPHASIS_ENABLED",
     )
     previous_env = {key: os.environ.get(key) for key in env_keys}
 
     try:
         render.OUTPUT_DIR = target
         production_transform.LAST_ALIGNMENT_METADATA = {}
+        production_transform.CURRENT_PUNCHLINE = None
         sys.argv = ["process.py", "--request", str(request_path)]
         os.environ.update({
             "STORY_TEST_MODE": "true",
-            "STORY_RENDER_MAX_SECONDS": "5",
+            "STORY_RENDER_MAX_SECONDS": PREVIEW_SECONDS,
             "VIDEO_WIDTH": "1080",
             "VIDEO_HEIGHT": "1920",
             "VIDEO_FPS": "30",
             "CAPTION_WORD_HIGHLIGHT_ENABLED": "true",
+            "CAPTION_SEMANTIC_EMPHASIS_ENABLED": "true",
         })
         production_transform.main()
     finally:
@@ -113,6 +132,7 @@ def _render_full_visual_preview(root, request_path):
         render.caption_events = previous_caption_events
         render.run_capture = previous_run_capture
         production_transform.LAST_ALIGNMENT_METADATA = previous_alignment_metadata
+        production_transform.CURRENT_PUNCHLINE = previous_punchline
         sys.argv = previous_argv
         for key, value in previous_env.items():
             if value is None:
@@ -123,25 +143,68 @@ def _render_full_visual_preview(root, request_path):
     output = target / "short.mp4"
     if not output.exists() or output.stat().st_size < 100_000:
         raise RuntimeError("Full visual preview is missing or too small")
+    narration = target / "narration.wav"
+    if not narration.exists() or narration.stat().st_size < 8_000:
+        raise RuntimeError("Full visual preview narration audio is missing or too small")
+
+    verify_env = os.environ.copy()
+    verify_env.update({
+        "PYTHONPATH": str(Path(__file__).resolve().parent),
+        "STORY_OUTPUT_DIR": str(target),
+        "STORY_TEST_MODE": "true",
+        "STORY_RENDER_MAX_SECONDS": PREVIEW_SECONDS,
+        "VIDEO_WIDTH": "1080",
+        "VIDEO_HEIGHT": "1920",
+        "VIDEO_FPS": "30",
+    })
+    subprocess.run(
+        [sys.executable, str(Path(__file__).resolve().parent / "transform" / "verify.py"), "--request", str(request_path)],
+        cwd=Path(__file__).resolve().parent.parent,
+        env=verify_env,
+        check=True,
+    )
 
     metadata = json.loads((target / "render-metadata.json").read_text(encoding="utf-8"))
+    if metadata.get("render_verified") is not True:
+        raise RuntimeError("Full visual preview failed canonical render verification")
     if metadata.get("caption_timing_mode") != "word_aligned":
         raise RuntimeError("Full visual preview did not use real word alignment")
     if metadata.get("caption_word_highlight_applied") is not True:
         raise RuntimeError("Full visual preview did not apply active-word highlighting")
+    if metadata.get("caption_semantic_emphasis_enabled") is not True:
+        raise RuntimeError("Full visual preview semantic emphasis feature is not enabled")
+    if metadata.get("caption_semantic_emphasis_applied") is not True:
+        raise RuntimeError("Full visual preview did not apply semantic punchline emphasis")
+    if metadata.get("caption_punchline_match_status") != "matched":
+        raise RuntimeError("Full visual preview did not deterministically match its semantic punchline")
+    if int(metadata.get("caption_punchline_word_count") or 0) < 2:
+        raise RuntimeError("Full visual preview matched an implausibly short punchline span")
+    if int(metadata.get("caption_emphasis_word_count") or 0) < 1:
+        raise RuntimeError("Full visual preview matched no emphasis words")
     if float(metadata.get("caption_alignment_coverage") or 0.0) < 0.90:
         raise RuntimeError("Full visual preview alignment coverage is below 0.90")
 
-    active_timestamp = _first_active_caption_midpoint(target / "captions.ass")
+    ass_path = target / "captions.ass"
+    active_timestamp = _first_caption_midpoint(
+        ass_path, production_transform.CAPTION_ACTIVE_ASS, "active-word"
+    )
+    semantic_timestamp = _first_caption_midpoint(
+        ass_path, production_transform.CAPTION_EMPHASIS_ASS, "semantic-emphasis"
+    )
     story_start = float(metadata["story_start_seconds"])
+    if semantic_timestamp <= story_start:
+        raise RuntimeError("Semantic emphasis began before story narration")
     early_timestamp = max(0.15, min(0.75, story_start - 0.20))
     early_frame = target / "frame-full-card.png"
     active_frame = target / "frame-full-caption.png"
+    semantic_frame = target / "frame-full-semantic.png"
     dry_run._extract_frame(output, early_timestamp, early_frame)
     dry_run._extract_frame(output, active_timestamp, active_frame)
+    dry_run._extract_frame(output, semantic_timestamp, semantic_frame)
 
     early = Image.open(early_frame).convert("RGBA")
     active = Image.open(active_frame).convert("RGBA")
+    semantic = Image.open(semantic_frame).convert("RGBA")
 
     card_pixels = _count_pixels(
         early,
@@ -150,9 +213,16 @@ def _render_full_visual_preview(root, request_path):
     )
     if card_pixels < 10_000:
         raise RuntimeError("Full visual preview opening card is not visibly present")
+    late_card_pixels = _count_pixels(
+        semantic,
+        render.CARD_BOX,
+        lambda r, g, b, a: a > 180 and r > 215 and g > 215 and b > 215,
+    )
+    if late_card_pixels > max(2_000, card_pixels * 0.25):
+        raise RuntimeError("Full visual preview opening card did not disappear before the punchline")
 
     handle_pixels = _count_pixels(
-        active,
+        semantic,
         render.HANDLE_PILL,
         lambda r, g, b, a: a > 180 and r > 205 and g > 205 and b > 205,
     )
@@ -160,7 +230,7 @@ def _render_full_visual_preview(root, request_path):
         raise RuntimeError("Full visual preview handle is not visibly present")
 
     subscribe_pixels = _count_pixels(
-        active,
+        semantic,
         render.SUBSCRIBE_PILL,
         lambda r, g, b, a: a > 180 and r > 165 and g > 125 and b < 140,
     )
@@ -178,11 +248,30 @@ def _render_full_visual_preview(root, request_path):
     if highlight_pixels < 20:
         raise RuntimeError("Full visual preview contains no visible active-word colour")
 
+    semantic_pixels = _count_pixels(
+        semantic,
+        (0, 650, render.VIDEO_WIDTH, 1250),
+        lambda r, g, b, a: a > 180 and r > 220 and 105 < g < 205 and b < 100,
+    )
+    if semantic_pixels < 20:
+        raise RuntimeError("Full visual preview contains no visibly distinct semantic emphasis colour")
+
+    min_x, max_x = _caption_bounds(semantic)
+    safe_slack = render.CAPTION_OUTLINE + 4
+    if min_x < render.CAPTION_MARGIN_X - safe_slack:
+        raise RuntimeError(f"Semantic caption crossed the left safe margin: x={min_x}")
+    if max_x > render.VIDEO_WIDTH - render.CAPTION_MARGIN_X + safe_slack:
+        raise RuntimeError(f"Semantic caption crossed the right safe margin: x={max_x}")
+
     return output, metadata, {
         "opening_card_light_pixels": card_pixels,
+        "opening_card_late_light_pixels": late_card_pixels,
         "handle_white_pixels": handle_pixels,
         "subscribe_yellow_pixels": subscribe_pixels,
         "caption_highlight_yellow_pixels": highlight_pixels,
+        "caption_semantic_orange_pixels": semantic_pixels,
+        "caption_leftmost_x": min_x,
+        "caption_rightmost_x": max_x,
     }
 
 
@@ -262,10 +351,18 @@ def main():
             "caption_highlight_smoke_events": preview_meta["caption_word_highlight_event_count"],
             "caption_rapid_highlight_groups": preview_meta["caption_rapid_highlight_group_count"],
             "caption_highlight_yellow_pixels": visual_metrics["caption_highlight_yellow_pixels"],
+            "caption_semantic_emphasis_applied": preview_meta["caption_semantic_emphasis_applied"],
+            "caption_punchline_match_status": preview_meta["caption_punchline_match_status"],
+            "caption_punchline_word_count": preview_meta["caption_punchline_word_count"],
+            "caption_emphasis_word_count": preview_meta["caption_emphasis_word_count"],
+            "caption_semantic_orange_pixels": visual_metrics["caption_semantic_orange_pixels"],
             "preview_opening_card_pixels": visual_metrics["opening_card_light_pixels"],
+            "preview_opening_card_late_pixels": visual_metrics["opening_card_late_light_pixels"],
             "preview_handle_pixels": visual_metrics["handle_white_pixels"],
             "preview_subscribe_pixels": visual_metrics["subscribe_yellow_pixels"],
-            "validation_preview_mode": "full_production_visual_with_word_highlight",
+            "preview_caption_leftmost_x": visual_metrics["caption_leftmost_x"],
+            "preview_caption_rightmost_x": visual_metrics["caption_rightmost_x"],
+            "validation_preview_mode": "full_production_visual_with_word_and_semantic_emphasis",
             "validation_count": stage_counts["schema"],
             "upload_count": stage_counts["upload_contract"],
         }

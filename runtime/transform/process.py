@@ -12,12 +12,16 @@ from transform.align import (
     group_aligned_words,
     validate_alignment,
 )
+from transform.semantic import resolve_semantic_span
 
 _ORIGINAL_CAPTION_EVENTS = render.caption_events
 LAST_ALIGNMENT_METADATA = {}
+CURRENT_PUNCHLINE = None
 
 CAPTION_ACTIVE_ASS = "&H0028D6FF&"  # RGB #FFD628 in ASS BGR order.
 CAPTION_BASE_ASS = "&H00FFFFFF&"
+CAPTION_PUNCHLINE_ASS = "&H00E8F4FF&"  # RGB #FFF4E8.
+CAPTION_EMPHASIS_ASS = "&H001C9FFF&"  # RGB #FF9F1C.
 CAPTION_RAPID_WORD_SECONDS = 0.12
 CAPTION_RAPID_GAP_SECONDS = 0.04
 CAPTION_RAPID_MAX_WORDS = 3
@@ -54,13 +58,21 @@ def bounded_render_capture(cmd):
     return round(time.monotonic() - started, 6), process.stderr or ""
 
 
-def _word_highlight_enabled():
-    raw = os.getenv("CAPTION_WORD_HIGHLIGHT_ENABLED", "true").strip().lower()
+def _env_flag(name, default=True):
+    raw = os.getenv(name, "true" if default else "false").strip().lower()
     if raw in {"1", "true", "yes", "on"}:
         return True
     if raw in {"0", "false", "no", "off"}:
         return False
-    raise AlignmentError("CAPTION_WORD_HIGHLIGHT_ENABLED must be true or false")
+    raise AlignmentError(f"{name} must be true or false")
+
+
+def _word_highlight_enabled():
+    return _env_flag("CAPTION_WORD_HIGHLIGHT_ENABLED", True)
+
+
+def _semantic_emphasis_enabled():
+    return _env_flag("CAPTION_SEMANTIC_EMPHASIS_ENABLED", True)
 
 
 def _dialogue(start, end, text, start_offset=0.0):
@@ -72,21 +84,39 @@ def _dialogue(start, end, text, start_offset=0.0):
     )
 
 
-def _caption_ass_focus_text(group, active_indices=()):
+def _caption_ass_focus_text(
+    group,
+    active_indices=(),
+    punchline_indices=(),
+    emphasis_indices=(),
+):
     words = [str(item["word"]).upper() for item in group]
     wrapped, event_font_size = render.caption_layout(" ".join(words))
     active = set(active_indices)
+    punchline = set(punchline_indices)
+    emphasis = set(emphasis_indices)
     rendered_lines = []
     cursor = 0
     for line in wrapped.splitlines():
         rendered_words = []
         for token in line.split():
             payload = render.escape_ass(token)
+            tags = []
+            semantic = False
+            if cursor in punchline:
+                tags.extend([f"\\c{CAPTION_PUNCHLINE_ASS}", "\\bord10"])
+                semantic = True
+            if cursor in emphasis:
+                tags.extend([f"\\c{CAPTION_EMPHASIS_ASS}", "\\bord12"])
+                semantic = True
             if cursor in active:
-                payload = (
-                    f"{{\\c{CAPTION_ACTIVE_ASS}}}{payload}"
-                    f"{{\\c{CAPTION_BASE_ASS}}}"
-                )
+                tags.append(f"\\c{CAPTION_ACTIVE_ASS}")
+            if tags:
+                payload = "{" + "".join(tags) + "}" + payload
+                reset = f"\\c{CAPTION_BASE_ASS}"
+                if semantic:
+                    reset += f"\\bord{render.CAPTION_OUTLINE}"
+                payload += "{" + reset + "}"
             rendered_words.append(payload)
             cursor += 1
         rendered_lines.append(" ".join(rendered_words))
@@ -98,9 +128,10 @@ def _caption_ass_focus_text(group, active_indices=()):
     return payload
 
 
-def _rapid_units(group):
+def _rapid_units(group, split_before=()):
     units = []
     rapid_group_count = 0
+    split_before = set(split_before)
     index = 0
     while index < len(group):
         item = group[index]
@@ -110,8 +141,11 @@ def _rapid_units(group):
         last = index
         if fast:
             while last + 1 < len(group) and last - index + 1 < CAPTION_RAPID_MAX_WORDS:
+                candidate_index = last + 1
+                if candidate_index in split_before:
+                    break
                 current = group[last]
-                candidate = group[last + 1]
+                candidate = group[candidate_index]
                 candidate_start = float(candidate["start"])
                 candidate_end = float(candidate["end"])
                 candidate_fast = (candidate_end - candidate_start) < CAPTION_RAPID_WORD_SECONDS
@@ -154,10 +188,49 @@ def aligned_caption_events(words, start_offset=0.0):
     return events
 
 
-def highlighted_caption_events(words, start_offset=0.0):
+def _semantic_local_state(resolution, group_global_start, group_length, at_time):
+    if resolution.get("status") != "matched":
+        return (), ()
+    punchline = ()
+    emphasis = ()
+    p_start = resolution.get("punchline_start")
+    p_end = resolution.get("punchline_end")
+    e_start = resolution.get("emphasis_start")
+    e_end = resolution.get("emphasis_end")
+    if p_start is not None and p_end is not None and p_start <= at_time < p_end:
+        punchline = tuple(
+            index - group_global_start
+            for index in resolution["punchline_indices"]
+            if group_global_start <= index < group_global_start + group_length
+        )
+    if e_start is not None and e_end is not None and e_start <= at_time < e_end:
+        emphasis = tuple(
+            index - group_global_start
+            for index in resolution["emphasis_indices"]
+            if group_global_start <= index < group_global_start + group_length
+        )
+    return punchline, emphasis
+
+
+def _semantic_split_before(resolution, group_global_start, group_length):
+    if resolution.get("status") != "matched":
+        return ()
+    p = sorted(resolution["punchline_indices"])
+    e = sorted(resolution["emphasis_indices"])
+    boundaries = {p[0], p[-1] + 1, e[0], e[-1] + 1}
+    return tuple(
+        boundary - group_global_start
+        for boundary in boundaries
+        if group_global_start < boundary < group_global_start + group_length
+    )
+
+
+def highlighted_caption_events(words, start_offset=0.0, semantic_resolution=None):
     groups = group_aligned_words(words)
     events = []
     rapid_group_count = 0
+    semantic_resolution = semantic_resolution or {"status": "disabled"}
+    group_global_start = 0
 
     for group_index, group in enumerate(groups):
         if not group:
@@ -169,17 +242,29 @@ def highlighted_caption_events(words, start_offset=0.0):
             if 0.0 <= next_group_start - group_end <= CAPTION_TINY_GAP_SECONDS:
                 group_end = next_group_start
 
-        units, group_rapid_count = _rapid_units(group)
+        units, group_rapid_count = _rapid_units(
+            group,
+            split_before=_semantic_split_before(
+                semantic_resolution, group_global_start, len(group)
+            ),
+        )
         rapid_group_count += group_rapid_count
         cursor = group_start
 
         for unit_index, (first, last, unit_start, unit_end) in enumerate(units):
             unit_start = max(cursor, unit_start)
             if unit_start - cursor > CAPTION_TINY_GAP_SECONDS:
+                punchline, emphasis = _semantic_local_state(
+                    semantic_resolution, group_global_start, len(group), cursor
+                )
                 event = _dialogue(
                     cursor,
                     unit_start,
-                    _caption_ass_focus_text(group),
+                    _caption_ass_focus_text(
+                        group,
+                        punchline_indices=punchline,
+                        emphasis_indices=emphasis,
+                    ),
                     start_offset=start_offset,
                 )
                 if event:
@@ -196,10 +281,18 @@ def highlighted_caption_events(words, start_offset=0.0):
             elif group_end - unit_end <= CAPTION_TINY_GAP_SECONDS:
                 unit_end = group_end
 
+            punchline, emphasis = _semantic_local_state(
+                semantic_resolution, group_global_start, len(group), unit_start
+            )
             event = _dialogue(
                 unit_start,
                 unit_end,
-                _caption_ass_focus_text(group, range(first, last + 1)),
+                _caption_ass_focus_text(
+                    group,
+                    range(first, last + 1),
+                    punchline_indices=punchline,
+                    emphasis_indices=emphasis,
+                ),
                 start_offset=start_offset,
             )
             if event:
@@ -207,23 +300,53 @@ def highlighted_caption_events(words, start_offset=0.0):
             cursor = max(cursor, unit_end)
 
         if group_end - cursor > CAPTION_TINY_GAP_SECONDS:
+            punchline, emphasis = _semantic_local_state(
+                semantic_resolution, group_global_start, len(group), cursor
+            )
             event = _dialogue(
                 cursor,
                 group_end,
-                _caption_ass_focus_text(group),
+                _caption_ass_focus_text(
+                    group,
+                    punchline_indices=punchline,
+                    emphasis_indices=emphasis,
+                ),
                 start_offset=start_offset,
             )
             if event:
                 events.append(event)
+        group_global_start += len(group)
 
     return events, rapid_group_count
 
 
-def build_caption_events(text, tts_segments, speech_duration, start_offset=0.0, narration_path=None, aligner=None):
+def _semantic_metadata(enabled, resolution):
+    resolution = resolution or {"status": "missing_metadata"}
+    applied = bool(enabled and resolution.get("status") == "matched")
+    return {
+        "caption_semantic_emphasis_enabled": bool(enabled),
+        "caption_semantic_emphasis_applied": applied,
+        "caption_punchline_match_status": resolution.get("status", "missing_metadata"),
+        "caption_punchline_word_count": int(resolution.get("punchline_word_count") or 0),
+        "caption_emphasis_word_count": int(resolution.get("emphasis_word_count") or 0),
+    }
+
+
+def build_caption_events(
+    text,
+    tts_segments,
+    speech_duration,
+    start_offset=0.0,
+    narration_path=None,
+    aligner=None,
+    punchline=None,
+):
     aligner = aligner or align_story_words
     narration_path = narration_path or (render.OUTPUT_DIR / "narration.wav")
     alignment_started = time.monotonic()
     highlight_enabled = True
+    semantic_enabled = True
+    semantic_resolution = {"status": "alignment_unavailable"}
     try:
         highlight_enabled = _word_highlight_enabled()
         words, align_meta = aligner(
@@ -234,9 +357,31 @@ def build_caption_events(text, tts_segments, speech_duration, start_offset=0.0, 
             speech_duration=speech_duration,
         )
         coverage = validate_alignment(words, text, speech_duration)
+
+        try:
+            semantic_enabled = _semantic_emphasis_enabled()
+        except Exception as exc:
+            semantic_enabled = False
+            semantic_resolution = {"status": "configuration_error"}
+            print(f"::warning::Semantic caption emphasis disabled: {exc}", file=sys.stderr)
+        else:
+            if semantic_enabled:
+                try:
+                    semantic_resolution = resolve_semantic_span(words, punchline)
+                except Exception as exc:
+                    semantic_resolution = {"status": "match_error"}
+                    print(
+                        f"::warning::Semantic caption match failed; keeping ordinary word highlighting: {exc}",
+                        file=sys.stderr,
+                    )
+            else:
+                semantic_resolution = {"status": "disabled"}
+
         if highlight_enabled:
             events, rapid_group_count = highlighted_caption_events(
-                words, start_offset=start_offset
+                words,
+                start_offset=start_offset,
+                semantic_resolution=semantic_resolution,
             )
         else:
             events = aligned_caption_events(words, start_offset=start_offset)
@@ -254,6 +399,7 @@ def build_caption_events(text, tts_segments, speech_duration, start_offset=0.0, 
             "caption_word_highlight_applied": bool(highlight_enabled),
             "caption_word_highlight_event_count": len(events) if highlight_enabled else 0,
             "caption_rapid_highlight_group_count": int(rapid_group_count),
+            **_semantic_metadata(semantic_enabled, semantic_resolution),
         }
         for key, value in align_meta.items():
             if key.startswith("caption_alignment_"):
@@ -273,18 +419,37 @@ def build_caption_events(text, tts_segments, speech_duration, start_offset=0.0, 
             "caption_word_highlight_applied": False,
             "caption_word_highlight_event_count": 0,
             "caption_rapid_highlight_group_count": 0,
+            **_semantic_metadata(False, {"status": "alignment_unavailable"}),
         }
         return events, metadata
 
 
 def caption_events_with_alignment(text, tts_segments, speech_duration, start_offset=0.0):
     global LAST_ALIGNMENT_METADATA
-    events, metadata = build_caption_events(text, tts_segments, speech_duration, start_offset=start_offset)
+    events, metadata = build_caption_events(
+        text,
+        tts_segments,
+        speech_duration,
+        start_offset=start_offset,
+        punchline=CURRENT_PUNCHLINE,
+    )
     LAST_ALIGNMENT_METADATA = metadata
     return events
 
 
+def _request_punchline_from_argv():
+    try:
+        position = sys.argv.index("--request")
+        request_path = sys.argv[position + 1]
+        request = render.load_json(request_path)
+        return (request.get("story") or {}).get("punchline")
+    except (ValueError, IndexError, OSError, TypeError):
+        return None
+
+
 def main():
+    global CURRENT_PUNCHLINE
+    CURRENT_PUNCHLINE = _request_punchline_from_argv()
     render.caption_events = caption_events_with_alignment
     render.run_capture = bounded_render_capture
     render.main()
@@ -300,6 +465,7 @@ def main():
         "caption_word_highlight_applied": False,
         "caption_word_highlight_event_count": 0,
         "caption_rapid_highlight_group_count": 0,
+        **_semantic_metadata(False, {"status": "alignment_unavailable"}),
     })
     render.atomic_write_json(metadata_path, metadata)
     print(json.dumps({
@@ -308,6 +474,8 @@ def main():
         "caption_alignment_word_count": metadata["caption_alignment_word_count"],
         "caption_alignment_coverage": metadata["caption_alignment_coverage"],
         "caption_word_highlight_applied": metadata["caption_word_highlight_applied"],
+        "caption_semantic_emphasis_applied": metadata["caption_semantic_emphasis_applied"],
+        "caption_punchline_match_status": metadata["caption_punchline_match_status"],
     }, ensure_ascii=False))
 
 

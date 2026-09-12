@@ -11,9 +11,13 @@ sys.path.insert(0, str(ROOT))
 from transform.align import AlignmentError, group_aligned_words, normalize_token, validate_alignment
 from transform.process import (
     CAPTION_ACTIVE_ASS,
+    CAPTION_EMPHASIS_ASS,
+    CAPTION_PUNCHLINE_ASS,
+    _caption_ass_focus_text,
     build_caption_events,
     highlighted_caption_events,
 )
+from transform.semantic import resolve_semantic_span
 
 
 def strip_ass_overrides(text):
@@ -52,6 +56,8 @@ class CaptionAlignmentTests(unittest.TestCase):
         self.assertEqual(metadata["caption_alignment_word_count"], 3)
         self.assertTrue(metadata["caption_word_highlight_applied"])
         self.assertEqual(metadata["caption_word_highlight_event_count"], 3)
+        self.assertFalse(metadata["caption_semantic_emphasis_applied"])
+        self.assertEqual(metadata["caption_punchline_match_status"], "missing_metadata")
         self.assertGreaterEqual(metadata["caption_alignment_duration_seconds"], 0)
 
     def test_grouping_prefers_natural_boundaries_over_rigid_three_words(self):
@@ -94,6 +100,8 @@ class CaptionAlignmentTests(unittest.TestCase):
         self.assertEqual(metadata["caption_timing_mode"], "estimated_fallback")
         self.assertEqual(metadata["caption_alignment_word_count"], 0)
         self.assertFalse(metadata["caption_word_highlight_applied"])
+        self.assertFalse(metadata["caption_semantic_emphasis_applied"])
+        self.assertEqual(metadata["caption_punchline_match_status"], "alignment_unavailable")
         self.assertEqual(metadata["caption_word_highlight_event_count"], 0)
         self.assertGreaterEqual(metadata["caption_alignment_duration_seconds"], 0)
         self.assertIn("synthetic failure", metadata["caption_alignment_error"])
@@ -141,6 +149,87 @@ class CaptionAlignmentTests(unittest.TestCase):
         first = events[0]
         self.assertEqual(first.count(f"{{\\c{CAPTION_ACTIVE_ASS}}}"), 3)
         self.assertIn("NO", strip_ass_overrides(first))
+
+    def test_semantic_match_is_scoped_to_punchline_then_emphasis(self):
+        words = [
+            {"word": "HE", "start": 0.00, "end": 0.12},
+            {"word": "HAD", "start": 0.13, "end": 0.25},
+            {"word": "DELETED", "start": 0.26, "end": 0.52},
+            {"word": "THE", "start": 0.53, "end": 0.63},
+            {"word": "WRONG", "start": 0.64, "end": 0.88},
+            {"word": "FOLDER.", "start": 0.89, "end": 1.16},
+        ]
+        punchline = {
+            "text": "He had deleted the wrong folder.",
+            "emphasis_text": "wrong folder",
+            "type": "REVERSAL",
+        }
+        resolved = resolve_semantic_span(words, punchline)
+        self.assertEqual(resolved["status"], "matched")
+        self.assertEqual(resolved["punchline_word_count"], 6)
+        self.assertEqual(resolved["emphasis_word_count"], 2)
+        self.assertAlmostEqual(resolved["punchline_start"], 0.0)
+        self.assertAlmostEqual(resolved["emphasis_start"], 0.64)
+        self.assertAlmostEqual(resolved["emphasis_end"], 1.16)
+
+    def test_semantic_styling_does_not_change_caption_text_or_wrapping(self):
+        group = [
+            {"word": "HE", "start": 0.0, "end": 0.1},
+            {"word": "DELETED", "start": 0.1, "end": 0.3},
+            {"word": "THE", "start": 0.3, "end": 0.4},
+            {"word": "WRONG", "start": 0.4, "end": 0.6},
+            {"word": "FOLDER.", "start": 0.6, "end": 0.8},
+        ]
+        plain = _caption_ass_focus_text(group, active_indices=(3,))
+        semantic = _caption_ass_focus_text(
+            group,
+            active_indices=(3,),
+            punchline_indices=range(5),
+            emphasis_indices=(3, 4),
+        )
+        self.assertEqual(strip_ass_overrides(plain), strip_ass_overrides(semantic))
+        self.assertIn(CAPTION_PUNCHLINE_ASS, semantic)
+        self.assertIn(CAPTION_EMPHASIS_ASS, semantic)
+        self.assertIn(CAPTION_ACTIVE_ASS, semantic)
+
+    def test_semantic_match_failure_keeps_real_alignment_and_word_highlight(self):
+        def fake_aligner(**_kwargs):
+            return [
+                {"word": "HE", "start": 0.00, "end": 0.20},
+                {"word": "LEFT.", "start": 0.21, "end": 0.50},
+            ], {"caption_alignment_backend": "fake-ctc", "caption_alignment_word_count": 2, "caption_alignment_coverage": 1.0}
+
+        events, metadata = build_caption_events(
+            "HE LEFT.", [("HE LEFT.", 12000)], 0.5,
+            narration_path=Path("/tmp/not-used.wav"), aligner=fake_aligner,
+            punchline={"text": "He stayed.", "emphasis_text": "stayed", "type": "REVERSAL"},
+        )
+        self.assertEqual(metadata["caption_timing_mode"], "word_aligned")
+        self.assertTrue(metadata["caption_word_highlight_applied"])
+        self.assertFalse(metadata["caption_semantic_emphasis_applied"])
+        self.assertEqual(metadata["caption_punchline_match_status"], "punchline_not_found")
+        self.assertTrue(any(CAPTION_ACTIVE_ASS in event for event in events))
+        self.assertTrue(all(CAPTION_EMPHASIS_ASS not in event for event in events))
+
+    def test_semantic_flag_is_independent_from_word_highlight_flag(self):
+        def fake_aligner(**_kwargs):
+            return [
+                {"word": "HE", "start": 0.00, "end": 0.20},
+                {"word": "LEFT.", "start": 0.21, "end": 0.50},
+            ], {"caption_alignment_backend": "fake-ctc", "caption_alignment_word_count": 2, "caption_alignment_coverage": 1.0}
+
+        with patch.dict(os.environ, {"CAPTION_SEMANTIC_EMPHASIS_ENABLED": "false"}, clear=False):
+            events, metadata = build_caption_events(
+                "HE LEFT.", [("HE LEFT.", 12000)], 0.5,
+                narration_path=Path("/tmp/not-used.wav"), aligner=fake_aligner,
+                punchline={"text": "He left.", "emphasis_text": "left", "type": "REVEAL"},
+            )
+        self.assertTrue(metadata["caption_word_highlight_applied"])
+        self.assertFalse(metadata["caption_semantic_emphasis_enabled"])
+        self.assertFalse(metadata["caption_semantic_emphasis_applied"])
+        self.assertEqual(metadata["caption_punchline_match_status"], "disabled")
+        self.assertTrue(any(CAPTION_ACTIVE_ASS in event for event in events))
+        self.assertTrue(all(CAPTION_EMPHASIS_ASS not in event for event in events))
 
     def test_highlighting_can_be_disabled_without_losing_word_aligned_timing(self):
         def fake_aligner(**_kwargs):

@@ -56,12 +56,18 @@ def synthetic_request(index):
             "story_type": "BACKFIRE",
             "hook": "The Backup He Forgot About",
             "script": (
-                f"My boss told everyone story {index + 1} had no proof. "
-                "I opened the archived workspace and found the timestamped backup."
+                "I don't panic when files vanish. No, no, no—I check the backup first. "
+                "My boss said there was no proof. I opened the archive. "
+                "He had deleted the wrong folder."
             ),
             "card_emojis": ["💼", "🗂️", "😳", "💾", "🔥"],
             "lead_gender": "female",
             "story_tone": "dramatic",
+            "punchline": {
+                "text": "He had deleted the wrong folder.",
+                "emphasis_text": "wrong folder",
+                "type": "REVERSAL",
+            },
         },
         "narration": {"engine": "kokoro", "voice": "af_bella", "speed": 1.75},
         "visual": {
@@ -590,8 +596,7 @@ def main():
     print(
         "Exercise PASS: "
         "24 representative inputs used shared orchestration and explicit side-effect boundaries; "
-        "one deterministic "
-        "fixture then executed the actual transformation with synthetic local inputs, "
+        "one deterministic fixture then executed the actual transformation with synthetic local inputs, "
         f"passed canonical verification and template contracts ({render_seconds:.3f}s)."
     )
     print("Template metrics:", json.dumps(template_metrics, sort_keys=True))
