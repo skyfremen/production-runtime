@@ -65,7 +65,7 @@ def _append_unique_tag(tags, seen, value):
 
 
 def build_upload_body(request_data, *, require_future=True, now_utc=None):
-    """Build the canonical scheduled or immediate-public YouTube request body."""
+    """Build the canonical scheduled or immediate-public remote request body."""
     publish_at = expected_publication(
         request_data, require_future=require_future, now_utc=now_utc
     )
@@ -86,7 +86,7 @@ def build_upload_body(request_data, *, require_future=True, now_utc=None):
     if extras:
         description += "\n\n" + " ".join(extras)
     if len(description.encode("utf-8")) > 5000:
-        raise ValueError("Description exceeds YouTube's 5000-byte limit")
+        raise ValueError("Description exceeds the remote service 5000-byte limit")
 
     tags = [marker]
     seen = {marker.lower()}
@@ -96,7 +96,7 @@ def build_upload_body(request_data, *, require_future=True, now_utc=None):
         _append_unique_tag(tags, seen, hashtag)
     tag_cost = sum(len(tag) + (2 if " " in tag else 0) for tag in tags) + max(0, len(tags) - 1)
     if tag_cost > 500:
-        raise ValueError("Tags exceed YouTube's combined 500-character limit")
+        raise ValueError("Tags exceed the remote service combined 500-character limit")
 
     status = {
         "privacyStatus": "public" if mode == "immediate" else "private",
@@ -122,19 +122,19 @@ def make_client():
 
     credentials = Credentials(
         token=None,
-        refresh_token=_credential("RUNTIME_AUTH_C", "YOUTUBE_REFRESH_TOKEN"),
+        refresh_token=_credential("RUNTIME_AUTH_C"),
         token_uri="https://oauth2.googleapis.com/token",
-        client_id=_credential("RUNTIME_AUTH_A", "YOUTUBE_CLIENT_ID"),
-        client_secret=_credential("RUNTIME_AUTH_B", "YOUTUBE_CLIENT_SECRET"),
+        client_id=_credential("RUNTIME_AUTH_A"),
+        client_secret=_credential("RUNTIME_AUTH_B"),
         scopes=YOUTUBE_SCOPES,
     )
     return build("youtube", "v3", credentials=credentials, cache_discovery=False)
 
 
-def _credential(primary, legacy):
-    value = os.environ.get(primary) or os.environ.get(legacy)
+def _credential(name):
+    value = os.environ.get(name)
     if not value:
-        raise KeyError(primary)
+        raise KeyError(name)
     return value
 
 
@@ -143,7 +143,7 @@ def authenticated_channel(youtube):
         part="id,snippet,contentDetails", mine=True
     ).execute().get("items", [])
     if len(items) != 1:
-        raise RecoveryBlocked("Exactly one authenticated YouTube channel is required")
+        raise RecoveryBlocked("Exactly one authenticated remote channel is required")
     if items[0].get("id") != EXPECTED_YOUTUBE_CHANNEL_ID:
         raise RecoveryBlocked(
             "Credentials resolve to a different channel than the pinned production channel"
@@ -341,14 +341,14 @@ def upload_new(youtube, request_data, video_path, body):
     status = body.get("status", {})
     if mode == "scheduled":
         if status.get("privacyStatus") != "private":
-            raise RecoveryBlocked("Scheduled upload must enter YouTube as private")
+            raise RecoveryBlocked("Scheduled upload must enter the remote service as private")
         if status.get("publishAt") != publish_at:
             raise RecoveryBlocked(
                 "Scheduled upload body does not match immutable publication time"
             )
     elif mode == "immediate":
         if status.get("privacyStatus") != "public":
-            raise RecoveryBlocked("Immediate upload must enter YouTube as public")
+            raise RecoveryBlocked("Immediate upload must enter the remote service as public")
         if "publishAt" in status:
             raise RecoveryBlocked("Immediate upload body must not contain publishAt")
     else:
