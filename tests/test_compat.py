@@ -32,6 +32,15 @@ class CompatibilityContractTests(unittest.TestCase):
         self.assertEqual(compat.validate_contract_hash(current), current)
         self.assertIn(current, compat.supported_contract_hashes())
 
+    def test_pre_v5_fingerprint_remains_supported_for_staged_rollout(self):
+        current = compat.contract_hash()
+        self.assertEqual(len(compat.LEGACY_CONTRACT_HASHES), 1)
+        legacy = next(iter(compat.LEGACY_CONTRACT_HASHES))
+        self.assertRegex(legacy, r"^[0-9a-f]{64}$")
+        self.assertNotEqual(legacy, current)
+        self.assertEqual(compat.validate_contract_hash(legacy), legacy)
+        self.assertIn(legacy, compat.supported_contract_hashes())
+
     def test_fail_closed_for_missing_invalid_or_unknown_fingerprint(self):
         with self.assertRaises(ValueError):
             compat.validate_contract_hash("")
@@ -68,6 +77,12 @@ class CompatibilityContractTests(unittest.TestCase):
         self.assertIn("punchline", schema["story_keys"])
         self.assertIn("background_primary_treatment", schema["visual_keys"])
         self.assertIn("background_backup_treatment", schema["visual_keys"])
+        self.assertEqual(
+            schema["treatment_keys"],
+            ["playback_rate", "segment_duration_seconds", "segment_start_seconds"],
+        )
+        self.assertEqual(schema["playback_rate_min"], 1.0)
+        self.assertEqual(schema["playback_rate_max"], 2.0)
 
     def test_production_boundary_requires_fingerprint(self):
         workflow = (ROOT / ".github" / "workflows" / "run.yml").read_text(encoding="utf-8")
