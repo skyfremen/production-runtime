@@ -5,6 +5,7 @@ import json
 import re
 
 from base import contract as base
+from guard import semantic
 from guard import schema
 from profile import config as profile
 from resources import policy as media_policy
@@ -119,7 +120,10 @@ def contract_payload():
             "forbidden_keys": _sorted(schema.FORBIDDEN_KEYS),
             "top_level_keys": _sorted(schema.TOP_LEVEL_KEYS),
             "story_keys": _sorted(schema.STORY_KEYS),
-            "story_v4_keys": _sorted(schema.STORY_V4_KEYS),
+            "punchline_required_keys": _sorted(semantic.PUNCHLINE_REQUIRED_KEYS),
+            "punchline_optional_keys": _sorted(semantic.PUNCHLINE_OPTIONAL_KEYS),
+            "punchline_types": _sorted(semantic.PUNCHLINE_TYPES),
+            "punchline_max_emphasis_words": semantic.MAX_EMPHASIS_WORDS,
             "narration_keys": _sorted(schema.NARRATION_KEYS),
             "visual_keys": _sorted(schema.VISUAL_KEYS),
             "youtube_keys": _sorted(schema.YOUTUBE_KEYS),
@@ -166,9 +170,6 @@ def contract_hash():
 
 
 _HASH_RE = re.compile(r"^[0-9a-f]{64}$")
-# During a future contract migration, add the old production fingerprint here
-# before deploying the new semantics. Remove it after the private producer
-# has switched to the new fingerprint.
 LEGACY_CONTRACT_HASHES = frozenset()
 
 
