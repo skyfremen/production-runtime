@@ -62,7 +62,7 @@ def _publication_contract(request, evidence, verification):
             raise RecoveryBlocked("Immediate video unexpectedly exposes publishAt")
         publish_at = verification.get("publish_at")
         if not publish_at:
-            raise RecoveryBlocked("Immediate video requires verified YouTube publishedAt")
+            raise RecoveryBlocked("Immediate video requires verified remote publishedAt")
         return mode, publish_at
     raise RecoveryBlocked("Unsupported immutable publication mode")
 
@@ -93,7 +93,7 @@ def build_receipt(request_path, request, upload, selection, render_meta):
         or verification.get("state") not in ALLOWED_VERIFICATION_STATES
     ):
         raise RecoveryBlocked(
-            "Cannot finalize without successful YouTube verification"
+            "Cannot finalize without successful remote verification"
         )
     publication_mode, publish_at = _publication_contract(
         request, evidence, verification

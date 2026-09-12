@@ -28,9 +28,9 @@ jobs:
       PYTHONPATH: runtime
       PRIVATE_STATE_TOKEN: ${{ secrets.PRIVATE_STATE_TOKEN }}
       PRIVATE_STATE_REPOSITORY: ${{ secrets.PRIVATE_STATE_REPOSITORY }}
-      RUNTIME_AUTH_A: ${{ secrets.YOUTUBE_CLIENT_ID }}
-      RUNTIME_AUTH_B: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
-      RUNTIME_AUTH_C: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+      RUNTIME_AUTH_A: ${{ secrets.RUNTIME_AUTH_A }}
+      RUNTIME_AUTH_B: ${{ secrets.RUNTIME_AUTH_B }}
+      RUNTIME_AUTH_C: ${{ secrets.RUNTIME_AUTH_C }}
       RUNTIME_COMMIT_SHA: ${{ github.sha }}
     steps:
       - name: Source

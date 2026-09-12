@@ -3,7 +3,7 @@
 ChatGPT owns semantic cache lookup and external source discovery. When cache lookup
 misses, the planner writes a small immutable sourcing manifest containing reviewed
 Pexels candidates. This module is the backend ingestion boundary: it uses the
-GitHub-held PEXELS_API_KEY to fetch official video_files rendition metadata,
+configured runtime source credential to fetch official video_files rendition metadata,
 validates the production rendition budget, and appends the new logical assets to
 the checked-in cache before any TTS/render/upload work begins.
 """
@@ -39,9 +39,9 @@ def now():
 
 
 def api_key():
-    value = (os.getenv("RUNTIME_SOURCE_KEY") or os.getenv("PEXELS_API_KEY", "")).strip()
+    value = os.getenv("RUNTIME_SOURCE_KEY", "").strip()
     if not value:
-        raise RuntimeError("PEXELS_API_KEY is required for Pexels cache ingestion")
+        raise RuntimeError("RUNTIME_SOURCE_KEY is required for source cache ingestion")
     return value
 
 

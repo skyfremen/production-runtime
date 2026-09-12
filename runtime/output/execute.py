@@ -42,7 +42,7 @@ def restore_upload(stored, identity, recovered=True):
     }
     atomic_write_json(OUTPUT_DIR / "upload_result.json", payload)
     print(
-        f"YouTube video resolved: {record['youtube_video_id']}; "
+        f"Remote video resolved: {record['youtube_video_id']}; "
         f"recovered={recovered}; upload_record={stored.sha}"
     )
 
@@ -131,7 +131,7 @@ def pre_generation_authorization(
         build_upload_body(request, now_utc=current)
     except (KeyError, TypeError, ValueError) as exc:
         raise RecoveryBlocked(
-            f"Invalid YouTube upload contract before generation: {exc}"
+            f"Invalid remote upload contract before generation: {exc}"
         ) from None
 
     authorize_fresh_upload(youtube, state, identity, channel)
@@ -198,4 +198,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

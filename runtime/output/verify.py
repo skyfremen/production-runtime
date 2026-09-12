@@ -13,7 +13,7 @@ FAILURE_CLASSIFICATION = Path("/tmp/runtime-failure-classification.json")
 
 
 class VerificationPending(RuntimeError):
-    """YouTube state is not ready yet, but durable upload evidence remains valid."""
+    """Remote state is not ready yet, but durable upload evidence remains valid."""
 
 
 def _instant(raw):
@@ -95,7 +95,7 @@ def verify_video(youtube, request, identity, evidence, sleep=time.sleep):
             )
             continue
         if len(items) != 1 or items[0].get("id") != video_id:
-            raise RecoveryBlocked("YouTube returned a different video ID")
+            raise RecoveryBlocked("Remote service returned a different video ID")
 
         item = items[0]
         snippet = item.get("snippet", {})
@@ -113,14 +113,14 @@ def verify_video(youtube, request, identity, evidence, sleep=time.sleep):
             or status.get("failureReason")
             or status.get("rejectionReason")
         ):
-            raise RecoveryBlocked("YouTube rejected or failed the upload")
+            raise RecoveryBlocked("Remote service rejected or failed the upload")
         for field in ("title", "description", "categoryId"):
             if snippet.get(field) != expected_snippet.get(field):
                 raise RecoveryBlocked(
-                    f"YouTube {field} differs from recorded upload metadata"
+                    f"Remote {field} differs from recorded upload metadata"
                 )
         if status.get("uploadStatus") != "processed":
-            last = "YouTube processing not complete"
+            last = "Remote processing not complete"
             observations.append(
                 {"attempt": attempt, "observed_at": now(), "state": last}
             )
@@ -142,7 +142,7 @@ def verify_video(youtube, request, identity, evidence, sleep=time.sleep):
         elif privacy == "private":
             if not _same_instant(remote_publish_at, expected_publish_at):
                 raise RecoveryBlocked(
-                    "YouTube scheduled publication differs from immutable request"
+                    "Remote scheduled publication differs from immutable request"
                 )
             verification_state = "verified_scheduled"
             publish_at_absent = False
@@ -162,7 +162,7 @@ def verify_video(youtube, request, identity, evidence, sleep=time.sleep):
             published_at = _instant(snippet.get("publishedAt"))
             if published_at and published_at < expected_dt:
                 raise RecoveryBlocked(
-                    "YouTube publishedAt predates the immutable scheduled time"
+                    "Remote publishedAt predates the immutable scheduled time"
                 )
             verification_state = "verified_scheduled_published"
             verified_publish_at = expected_publish_at
@@ -191,7 +191,7 @@ def verify_video(youtube, request, identity, evidence, sleep=time.sleep):
             "prior_observations": observations,
         }
     raise VerificationPending(
-        f"YouTube verification incomplete after {len(RETRY_DELAYS)} bounded attempts: {last}"
+        f"Remote verification incomplete after {len(RETRY_DELAYS)} bounded attempts: {last}"
     )
 
 
@@ -222,7 +222,7 @@ def main():
     atomic_write_json(path, upload)
     atomic_write_json(OUTPUT_DIR / "youtube-verification.json", verification)
     print(
-        f"YouTube verified: {upload['youtube_video_id']}; "
+        f"Remote verification passed: {upload['youtube_video_id']}; "
         f"state={verification['state']}; publishAt={verification['publish_at']}; "
         f"tags={verification['observed_marker_tags']}"
     )
