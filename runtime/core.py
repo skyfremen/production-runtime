@@ -5,15 +5,17 @@ import io
 import json
 import os
 import subprocess
+import sys
 import traceback
 from pathlib import Path
 
-from errors import E_EXEC, E_VERIFY
+from errors import E_EXEC, E_PREPARE, E_VERIFY
 
 from resources.validate import load_registry, validate_request_backgrounds
 from engine.batch import ordered_manifest_requests
 from engine.pipeline import ProductionPipeline
 from engine.shard import select_shard
+from output.progress import record_progress
 
 PUBLIC_SUMMARY = Path("/tmp/runtime-public-summary.json")
 PENDING = Path("/tmp/batch-pending-verification.txt")
@@ -28,8 +30,22 @@ class RunnerError(RuntimeError):
 
 
 def silent_call(command, env=None):
+    timeout = int(os.getenv("RUNTIME_CHILD_TIMEOUT_SECONDS", "1200"))
+    if not 60 <= timeout <= 3600:
+        raise RunnerError("Invalid runtime child-process timeout")
     with INTERNAL_LOG.open("a", encoding="utf-8") as log:
-        result = subprocess.run(command, env=env, stdout=log, stderr=subprocess.STDOUT)
+        try:
+            result = subprocess.run(
+                command,
+                env=env,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RunnerError(
+                f"Internal production command timed out after {timeout}s"
+            ) from exc
     if result.returncode:
         raise RunnerError("Internal production command failed")
 
@@ -81,6 +97,7 @@ def prepare_shared(manifest_path):
         with open(output, "a", encoding="utf-8") as target:
             target.write(f"registry_sha={git_blob_sha(raw)}\n")
             target.write(f"registry_refresh={int(bool(manifest['sourcing']))}\n")
+    record_progress(manifest, "prepared")
     print(f"Prepare PASS: items={len(ordered)}")
 
 
@@ -99,6 +116,7 @@ def run(manifest_path, concurrency, *, profile=None, shard_index=None,
         raise RunnerError("Single execution requires concurrency 1")
     if profile == "paired" and concurrency != 2:
         raise RunnerError("Paired execution requires concurrency 2")
+    record_progress(manifest, "unit_started", shard_index)
     print(f"Prepare PASS: items={len(ordered)}")
 
     silent_call(["python", "runtime/output/access.py"])
@@ -109,6 +127,7 @@ def run(manifest_path, concurrency, *, profile=None, shard_index=None,
     pipeline = ProductionPipeline(concurrency, base_env=base_env)
     with INTERNAL_LOG.open("a", encoding="utf-8") as log, contextlib.redirect_stdout(log), contextlib.redirect_stderr(log):
         production = pipeline.run(ordered)
+    record_progress(manifest, "unit_produced", shard_index)
 
     failed_stages = {}
     failures = Path("/tmp/batch-failures.txt")
@@ -155,6 +174,7 @@ def run(manifest_path, concurrency, *, profile=None, shard_index=None,
     )
     if failed:
         raise RunnerError("One or more items failed; recovery remains authoritative")
+    record_progress(manifest, "unit_finished", shard_index)
 
 
 def main():
@@ -180,7 +200,7 @@ def main():
         )
 
 
-def record_failure(exc):
+def record_failure(exc, *, preparation=False):
     internal_detail = ""
     if INTERNAL_LOG.exists():
         internal_detail = INTERNAL_LOG.read_text(
@@ -198,20 +218,22 @@ def record_failure(exc):
         except (OSError, ValueError, json.JSONDecodeError):
             classification = {}
     code = classification.get("error_code")
-    if code not in {E_EXEC, E_VERIFY}:
-        code = E_EXEC
+    allowed_codes = {E_EXEC, E_VERIFY} if not preparation else {E_PREPARE}
+    if code not in allowed_codes:
+        code = E_PREPARE if preparation else E_EXEC
     stage = classification.get("stage")
-    if stage not in {"execute", "verify"}:
-        stage = "execute"
+    allowed_stages = {"execute", "verify"} if not preparation else {"prepare"}
+    if stage not in allowed_stages:
+        stage = "prepare" if preparation else "execute"
     retryable = classification.get("retryable")
     if not isinstance(retryable, bool):
-        retryable = isinstance(exc, (OSError, RunnerError))
+        retryable = isinstance(exc, (OSError, RunnerError, subprocess.TimeoutExpired))
     DIAGNOSTIC.write_text(json.dumps({
         "schema_version": 1,
         "stage": stage,
         "error_code": code,
         "retryable": retryable,
-        "execution_started": True,
+        "execution_started": not preparation,
         "verification_completed": False,
         "detail": detail,
     }, sort_keys=True) + "\n", encoding="utf-8")
@@ -219,7 +241,8 @@ def record_failure(exc):
 
 
 if __name__ == "__main__":
+    preparation = "--prepare-shared" in sys.argv
     try:
         main()
-    except (RunnerError, KeyError, OSError, ValueError, json.JSONDecodeError) as exc:
-        raise SystemExit(record_failure(exc)) from None
+    except Exception as exc:
+        raise SystemExit(record_failure(exc, preparation=preparation)) from None
