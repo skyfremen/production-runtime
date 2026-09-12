@@ -146,8 +146,6 @@ def validate_request_data(data, request_path=None):
     if version == 4:
         return legacy.validate_request_data(data, request_path=request_path)
     if version != 5:
-        # Retain the legacy error token during staged rollout so existing callers
-        # that assert the old fail-closed diagnostic do not silently weaken.
         return ["schema_version must be 4"]
 
     visual = data.get("visual")
