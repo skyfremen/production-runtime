@@ -60,6 +60,8 @@ class BoundaryTests(unittest.TestCase):
         dry_refs = set(re.findall(r"secrets\.([A-Z0-9_]+)", dry))
         self.assertEqual(dry_refs, {"GITHUB_TOKEN"})
         for forbidden in (
+            "PRIVATE_STATE_TOKEN",
+            "PRIVATE_STATE_REPOSITORY",
             "YOUTUBE_" + "CLIENT_ID",
             "YOUTUBE_" + "CLIENT_SECRET",
             "YOUTUBE_" + "REFRESH_TOKEN",
