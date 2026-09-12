@@ -4,7 +4,7 @@ from transform.align import normalized_words
 
 
 def _normalized_phrase(text):
-    return [item["normalized"] for item in normalized_words(str(text or ""))]
+    return [normalized for _display, normalized in normalized_words(str(text or ""))]
 
 
 def _matches(haystack, needle):
