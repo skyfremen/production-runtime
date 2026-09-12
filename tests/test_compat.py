@@ -32,6 +32,15 @@ class CompatibilityContractTests(unittest.TestCase):
         self.assertEqual(compat.validate_contract_hash(current), current)
         self.assertIn(current, compat.supported_contract_hashes())
 
+    def test_pre_v5_fingerprint_remains_supported_for_staged_rollout(self):
+        current = compat.contract_hash()
+        self.assertEqual(len(compat.LEGACY_CONTRACT_HASHES), 1)
+        legacy = next(iter(compat.LEGACY_CONTRACT_HASHES))
+        self.assertRegex(legacy, r"^[0-9a-f]{64}$")
+        self.assertNotEqual(legacy, current)
+        self.assertEqual(compat.validate_contract_hash(legacy), legacy)
+        self.assertIn(legacy, compat.supported_contract_hashes())
+
     def test_fail_closed_for_missing_invalid_or_unknown_fingerprint(self):
         with self.assertRaises(ValueError):
             compat.validate_contract_hash("")
@@ -57,15 +66,23 @@ class CompatibilityContractTests(unittest.TestCase):
         self.assertFalse(payload["behavior"]["renditions"]["hd_landscape"]["suitable"])
         self.assertTrue(payload["behavior"]["renditions"]["uhd_landscape"]["suitable"])
 
-    def test_semantic_punchline_schema_is_fingerprinted(self):
+    def test_semantic_and_background_treatment_schema_are_fingerprinted(self):
         schema = compat.contract_payload()["schema"]
-        self.assertEqual(schema["current_version"], 4)
-        self.assertEqual(schema["supported_versions"], [4])
+        self.assertEqual(schema["current_version"], 5)
+        self.assertEqual(schema["supported_versions"], [4, 5])
         self.assertEqual(schema["punchline_required_keys"], ["emphasis_text", "text"])
         self.assertEqual(schema["punchline_optional_keys"], ["type"])
         self.assertEqual(schema["punchline_max_emphasis_words"], 5)
         self.assertIn("REVERSAL", schema["punchline_types"])
         self.assertIn("punchline", schema["story_keys"])
+        self.assertIn("background_primary_treatment", schema["visual_keys"])
+        self.assertIn("background_backup_treatment", schema["visual_keys"])
+        self.assertEqual(
+            schema["treatment_keys"],
+            ["playback_rate", "segment_duration_seconds", "segment_start_seconds"],
+        )
+        self.assertEqual(schema["playback_rate_min"], 1.0)
+        self.assertEqual(schema["playback_rate_max"], 2.0)
 
     def test_production_boundary_requires_fingerprint(self):
         workflow = (ROOT / ".github" / "workflows" / "run.yml").read_text(encoding="utf-8")
