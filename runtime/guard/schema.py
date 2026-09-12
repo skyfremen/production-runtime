@@ -14,6 +14,7 @@ from guard import schema_v4 as legacy
 
 SCHEMA_VERSION = 5
 SUPPORTED_SCHEMA_VERSIONS = {4, 5}
+SUPPORTED_SCHEMA_TEXT = " or ".join(str(value) for value in sorted(SUPPORTED_SCHEMA_VERSIONS))
 FORBIDDEN_KEYS = legacy.FORBIDDEN_KEYS
 TOP_LEVEL_KEYS = legacy.TOP_LEVEL_KEYS
 STORY_KEYS = legacy.STORY_KEYS
@@ -146,7 +147,7 @@ def validate_request_data(data, request_path=None):
     if version == 4:
         return legacy.validate_request_data(data, request_path=request_path)
     if version != 5:
-        return ["schema_version must be 4"]
+        return [f"schema_version must be {SUPPORTED_SCHEMA_TEXT}"]
 
     visual = data.get("visual")
     treatment_errors = []
