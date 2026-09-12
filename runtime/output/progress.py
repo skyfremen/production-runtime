@@ -12,6 +12,7 @@ BATCH_RE = re.compile(r"[br]_[0-9a-f]{30}")
 SHA_RE = re.compile(r"[0-9a-f]{40}")
 DISPATCH_RE = re.compile(r"d_[0-9a-f]{24}")
 ALLOWED_STAGES = {"prepared", "unit_started", "unit_produced", "unit_finished", "aggregate_started"}
+PRODUCTION_WORKFLOWS = {"Run", "Single"}
 
 
 def iso_z():
@@ -71,6 +72,9 @@ def _matching_start(state, batch_id, source_sha, run_id, run_attempt, runtime_sh
 
 
 def record_progress(manifest, stage, shard_index=None):
+    if os.environ.get("GITHUB_WORKFLOW") not in PRODUCTION_WORKFLOWS:
+        print(f"Progress SKIP: {stage}")
+        return
     if stage not in ALLOWED_STAGES:
         raise TransportError("Invalid runtime progress stage")
     batch_id, source_sha, run_id, run_attempt, runtime_sha = _identity(manifest)
