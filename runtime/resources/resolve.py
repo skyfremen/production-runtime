@@ -1,437 +1,209 @@
-"""Production-only logical-background rendition resolver.
+"""Physical background resolver with immutable schema-v5 treatment execution.
 
-The immutable request decides *which* logical primary and backup may be used.
-This module only chooses and downloads a physical rendition of those IDs.
-Selection is based on effective resolution after the required vertical crop.
+The retained resolve_base module owns the proven logical-ID/rendition/cache/
+normalization path. This layer only applies the request-authorized temporal
+segment and playback rate after the selected physical file is already normalized
+to production size. The normalized cache therefore remains reusable and never
+becomes persistent creative state.
 """
 
 import argparse
-import fcntl
-import hashlib
 import json
-import os
-import shutil
 import subprocess
 import time
-import urllib.error
-import urllib.request
-from datetime import datetime, timezone
 from pathlib import Path
 
-from resources.policy import (
-    TARGET_FPS,
-    TARGET_HEIGHT,
-    TARGET_WIDTH,
-    crop_fill_geometry,
-    rendition_is_production_suitable,
-    rendition_sort_key,
-)
-from resources.quality import analyze_caption_region
-from resources.validate import load_registry, validate_request_backgrounds
-from base.contract import OUTPUT_DIR, atomic_write_json, load_json
-
-BASE = Path(__file__).resolve().parents[1]
-NORMALIZED_VIDEO_CODEC = "h264"
-NORMALIZED_PRESET = "ultrafast"
-NORMALIZED_CRF = 18
-HTTP_HEADERS = {
-    "User-Agent": "RuntimeResourceClient/1.0",
-    "Accept": "video/mp4,video/*;q=0.9,*/*;q=0.1",
-}
+from guard.schema import treatment_for_slot
+from resources import resolve_base as base
+from resources.resolve_base import *  # re-export the established resolver surface
 
 
-def parse_rate(value):
-    raw = str(value or "").strip()
-    if not raw:
-        return 0.0
-    if "/" in raw:
-        numerator, denominator = raw.split("/", 1)
-        try:
-            denominator = float(denominator)
-            return float(numerator) / denominator if denominator else 0.0
-        except ValueError:
-            return 0.0
-    try:
-        return float(raw)
-    except ValueError:
-        return 0.0
+def _sync_base_overrides():
+    """Preserve existing test/runtime overrides while delegating to resolve_base."""
+    base.OUTPUT_DIR = OUTPUT_DIR
+    base.preflight = preflight
+    base.download = download
 
 
-
-def suitable_renditions(asset, target_width=TARGET_WIDTH, target_height=TARGET_HEIGHT, target_fps=TARGET_FPS):
-    candidates = [
-        dict(rendition)
-        for rendition in asset.get("renditions", [])
-        if rendition_is_production_suitable(
-            rendition, target_width=target_width, target_height=target_height
-        )
-    ]
-    return sorted(
-        candidates,
-        key=lambda rendition: rendition_sort_key(
-            rendition, target_width, target_height, target_fps
-        ),
-    )
-
-
-def select_best_rendition(asset, target_width=TARGET_WIDTH, target_height=TARGET_HEIGHT, target_fps=TARGET_FPS):
-    candidates = suitable_renditions(asset, target_width, target_height, target_fps)
-    return candidates[0] if candidates else None
-
-
-def generic_fallback(asset):
-    """Use the provider original only when it already fits the production cost cap.
-
-    A generic provider download endpoint can resolve to a 4K file, so unknown or
-    oversized originals are deliberately not used by production.
-    """
-    url = str(asset.get("direct_url") or "").strip()
-    if not url:
-        return None
-    fallback = {
-        "id": "generic-original-fallback",
-        "width": asset.get("width"),
-        "height": asset.get("height"),
-        "fps": asset.get("fps"),
-        "file_type": "video/mp4",
-        "quality": "original",
-        "direct_url": url,
-    }
-    return fallback if rendition_is_production_suitable(fallback) else None
-
-
-def preflight(url):
-    started = time.monotonic()
-    request = urllib.request.Request(
-        str(url), headers={**HTTP_HEADERS, "Range": "bytes=0-0"}
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=35) as response:
-            # Some origins ignore Range. Read one byte only and close so preflight
-            # can never become an accidental full background download.
-            response.read(1)
-            code = int(response.status)
-            content_type = str(response.headers.get_content_type() or "").lower()
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        elapsed = round(time.monotonic() - started, 6)
-        return False, f"HTTP preflight failed: {exc}", elapsed
-    elapsed = round(time.monotonic() - started, 6)
-    if not 200 <= code < 300:
-        return False, f"HTTP {code}", elapsed
-    if content_type == "text/html":
-        return False, "returned HTML instead of video media", elapsed
-    return True, f"HTTP {code}, {content_type or 'unknown content-type'}", elapsed
-
-
-def probe_video(target):
-    probe = subprocess.run(
+def _media_duration_seconds(path):
+    process = subprocess.run(
         [
-            "ffprobe", "-v", "error", "-select_streams", "v:0",
-            "-show_entries", "stream=codec_type,codec_name,width,height,r_frame_rate",
-            "-of", "json", str(target),
+            "ffprobe", "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            str(path),
         ],
         capture_output=True,
         text=True,
     )
-    if probe.returncode != 0:
-        raise RuntimeError("download is not a decodable video")
+    if process.returncode != 0:
+        raise RuntimeError("cannot determine normalized background duration")
     try:
-        stream = json.loads(probe.stdout or "{}").get("streams", [])[0]
-    except (IndexError, json.JSONDecodeError):
-        raise RuntimeError("download has no video stream")
-    if stream.get("codec_type") != "video":
-        raise RuntimeError("download has no video stream")
-    return {
-        "codec": stream.get("codec_name"),
-        "width": int(stream.get("width") or 0),
-        "height": int(stream.get("height") or 0),
-        "fps": round(parse_rate(stream.get("r_frame_rate")), 6),
-    }
+        value = float((process.stdout or "").strip())
+    except (TypeError, ValueError):
+        raise RuntimeError("normalized background duration is invalid") from None
+    if value <= 0:
+        raise RuntimeError("normalized background duration must be positive")
+    return value
 
 
-def sha256_file(path):
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+def _validate_treatment_window(treatment, media_duration):
+    start = float(treatment["segment_start_seconds"])
+    duration = treatment["segment_duration_seconds"]
+    rate = float(treatment["playback_rate"])
+    if start < 0 or not 1.0 <= rate <= 2.0:
+        raise RuntimeError("background treatment violates execution bounds")
+    if duration is None:
+        if start != 0:
+            raise RuntimeError("full-source background treatment must start at zero")
+        return
+    duration = float(duration)
+    if duration < 1.0:
+        raise RuntimeError("background treatment segment is too short")
+    if start >= media_duration or start + duration > media_duration + 0.05:
+        raise RuntimeError(
+            "background treatment segment exceeds the resolved media duration"
+        )
 
 
-def normalization_required(probe, target_width=TARGET_WIDTH, target_height=TARGET_HEIGHT, target_fps=TARGET_FPS):
-    """Return whether repeated rendering would decode or scale avoidable pixels."""
-    return not (
-        int(probe.get("width") or 0) == int(target_width)
-        and int(probe.get("height") or 0) == int(target_height)
-        and abs(float(probe.get("fps") or 0) - float(target_fps)) <= 0.05
-        and probe.get("codec") == NORMALIZED_VIDEO_CODEC
-    )
-
-
-def normalize_for_render(target, source_probe, target_width=TARGET_WIDTH, target_height=TARGET_HEIGHT, target_fps=TARGET_FPS):
-    """Normalize one modest source clip once, avoiding repeated scaling while looping."""
+def apply_background_treatment(target, treatment, caption_score=None):
+    """Apply trim/speed once to an already normalized 1080x1920/30 asset."""
     target = Path(target)
-    if not normalization_required(source_probe, target_width, target_height, target_fps):
+    if not target.exists():
+        raise RuntimeError("normalized background is missing before treatment")
+    media_duration = _media_duration_seconds(target)
+    _validate_treatment_window(treatment, media_duration)
+
+    start = float(treatment["segment_start_seconds"])
+    duration = treatment["segment_duration_seconds"]
+    rate = float(treatment["playback_rate"])
+    identity = duration is None and start == 0.0 and abs(rate - 1.0) <= 1e-9
+    if identity:
         return {
-            "background_normalization_applied": False,
-            "background_normalization_duration_seconds": 0.0,
-            "render_probe": source_probe,
+            "background_treatment_applied": False,
+            "background_treatment_duration_seconds": 0.0,
+            "background_treatment_input_duration_seconds": round(media_duration, 6),
+            "background_treatment_output_duration_seconds": round(media_duration, 6),
+            "treated_background_bytes": target.stat().st_size,
+            "treated_background_sha256": sha256_file(target),
+            "readability": analyze_caption_region(
+                target, media_duration, caption_score
+            ),
         }
 
-    normalized = target.parent / f"{target.name}.normalized.mp4"
-    normalized.unlink(missing_ok=True)
+    treated = target.parent / f"{target.name}.treated.mp4"
+    treated.unlink(missing_ok=True)
+    filters = []
+    if duration is None:
+        filters.append("trim=start=0")
+        output_duration = media_duration / rate
+    else:
+        filters.append(
+            f"trim=start={start:.6f}:duration={float(duration):.6f}"
+        )
+        output_duration = float(duration) / rate
+    filters.extend([
+        f"setpts=(PTS-STARTPTS)/{rate:.8f}",
+        f"fps={TARGET_FPS}",
+        "format=yuv420p",
+    ])
     started = time.monotonic()
     try:
         process = subprocess.run(
             [
-                "ffmpeg", "-y", "-hide_banner", "-v", "error", "-i", str(target),
-                "-map", "0:v:0", "-vf",
-                (
-                    f"fps={target_fps},"
-                    f"scale={target_width}:{target_height}:force_original_aspect_ratio=increase,"
-                    f"crop={target_width}:{target_height},format=yuv420p"
-                ),
+                "ffmpeg", "-y", "-hide_banner", "-v", "error",
+                "-i", str(target),
+                "-map", "0:v:0", "-vf", ",".join(filters),
                 "-an", "-sn", "-dn", "-map_metadata", "-1",
                 "-c:v", "libx264", "-preset", NORMALIZED_PRESET,
-                "-crf", str(NORMALIZED_CRF), "-movflags", "+faststart", str(normalized),
+                "-crf", str(NORMALIZED_CRF), "-movflags", "+faststart",
+                str(treated),
             ],
             capture_output=True,
             text=True,
         )
         if process.returncode != 0:
             detail = (process.stderr or "unknown ffmpeg failure").strip()[-1000:]
-            raise RuntimeError(f"background normalization failed: {detail}")
-        if not normalized.exists() or normalized.stat().st_size < 10000:
-            raise RuntimeError("normalized background is suspiciously small")
-        render_probe = probe_video(normalized)
-        if normalization_required(render_probe, target_width, target_height, target_fps):
-            raise RuntimeError(f"normalized background has unexpected probe: {render_probe}")
-        normalized.replace(target)
+            raise RuntimeError(f"background treatment failed: {detail}")
+        if not treated.exists() or treated.stat().st_size < 10000:
+            raise RuntimeError("treated background is suspiciously small")
+        probe = probe_video(treated)
+        if normalization_required(probe):
+            raise RuntimeError(
+                f"treated background left production-normalized shape: {probe}"
+            )
+        actual_duration = _media_duration_seconds(treated)
+        if actual_duration <= 0 or actual_duration > output_duration + 0.25:
+            raise RuntimeError("treated background duration is inconsistent")
+        treated.replace(target)
     finally:
-        normalized.unlink(missing_ok=True)
+        treated.unlink(missing_ok=True)
 
-    return {
-        "background_normalization_applied": True,
-        "background_normalization_duration_seconds": round(
-            time.monotonic() - started, 6
-        ),
-        "render_probe": render_probe,
-    }
-
-
-def download(asset, rendition, target, target_width=TARGET_WIDTH, target_height=TARGET_HEIGHT,
-             segment_duration_seconds=175):
-    # Fail before network I/O if the effective post-crop resolution is inadequate.
-    if not rendition_is_production_suitable(
-        rendition, target_width=target_width, target_height=target_height
-    ):
-        raise RuntimeError(
-            f"rendition {rendition.get('id')} cannot meet the post-crop quality floor"
-        )
-
-    target = Path(target)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    cache_root = Path(os.getenv("RUNTIME_RESOURCE_CACHE", "/tmp/runtime-resource-cache"))
-    cache_root.mkdir(parents=True, exist_ok=True)
-    cache_identity = json.dumps(
-        [asset.get("id"), rendition.get("id"), rendition.get("direct_url"),
-         target_width, target_height, TARGET_FPS], separators=(",", ":")
-    )
-    cache_key = hashlib.sha256(cache_identity.encode("utf-8")).hexdigest()
-    cache_video = cache_root / f"{cache_key}.mp4"
-    cache_meta = cache_root / f"{cache_key}.json"
-    lock_path = cache_root / f"{cache_key}.lock"
-    lock = lock_path.open("a+b")
-    fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-    if cache_video.exists() and cache_meta.exists() and cache_video.stat().st_size >= 10000:
-        cached_probe = probe_video(cache_video)
-        if not normalization_required(cached_probe, target_width, target_height, TARGET_FPS):
-            shutil.copy2(cache_video, target)
-            cached = json.loads(cache_meta.read_text(encoding="utf-8"))
-            cached.update({
-                "background_cache_hit": True,
-                "background_cache_key": cache_key,
-                "render_background_bytes": target.stat().st_size,
-                "render_background_sha256": sha256_file(target),
-            })
-            lock.close()
-            return cached
-    started = time.monotonic()
-    last_error = None
-    for attempt in range(1, 4):
-        target.unlink(missing_ok=True)
-        request = urllib.request.Request(
-            str(rendition["direct_url"]), headers=HTTP_HEADERS
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=180) as response:
-                if not 200 <= int(response.status) < 300:
-                    raise RuntimeError(f"HTTP {response.status}")
-                with target.open("wb") as output:
-                    while chunk := response.read(1024 * 1024):
-                        output.write(chunk)
-            last_error = None
-            break
-        except (urllib.error.URLError, TimeoutError, OSError, RuntimeError) as exc:
-            last_error = exc
-            if attempt < 3:
-                time.sleep(2)
-    if last_error is not None:
-        target.unlink(missing_ok=True)
-        raise RuntimeError(f"download failed after 3 attempts: {last_error}")
     elapsed = round(time.monotonic() - started, 6)
-    if not target.exists() or target.stat().st_size < 10000:
-        raise RuntimeError(f"Downloaded background {asset['id']} is suspiciously small")
-    probe = probe_video(target)
-    if not rendition_is_production_suitable(
-        {"file_type": "video/mp4", **probe},
-        target_width=target_width,
-        target_height=target_height,
-    ):
-        raise RuntimeError(
-            f"downloaded rendition {probe['width']}x{probe['height']} cannot meet the post-crop quality floor"
-        )
-    source_bytes = target.stat().st_size
-    source_sha256 = sha256_file(target)
     readability = analyze_caption_region(
-        target, segment_duration_seconds, asset.get("caption_readability_score")
+        target, min(actual_duration, output_duration), caption_score
     )
-    geometry = crop_fill_geometry(
-        probe["width"], probe["height"], target_width, target_height
-    )
-    normalization = normalize_for_render(
-        target, probe, target_width, target_height, TARGET_FPS
-    )
-    result = {
-        "downloaded_bytes": source_bytes,
-        "download_duration_seconds": elapsed,
-        "background_sha256": source_sha256,
-        "render_background_bytes": target.stat().st_size,
-        "render_background_sha256": sha256_file(target),
-        "source_probe": probe,
-        "effective_crop_width": round(geometry["effective_crop_width"], 3),
-        "effective_crop_height": round(geometry["effective_crop_height"], 3),
-        "upscale_factor": round(geometry["scale_factor"], 6),
-        "significant_upscaling_used": geometry["scale_factor"] > 1.05,
+    return {
+        "background_treatment_applied": True,
+        "background_treatment_duration_seconds": elapsed,
+        "background_treatment_input_duration_seconds": round(media_duration, 6),
+        "background_treatment_output_duration_seconds": round(actual_duration, 6),
+        "treated_background_bytes": target.stat().st_size,
+        "treated_background_sha256": sha256_file(target),
         "readability": readability,
-        "background_cache_hit": False,
-        "background_cache_key": cache_key,
-        **normalization,
     }
-    cache_tmp = cache_root / f"{cache_key}.{os.getpid()}.tmp"
-    shutil.copy2(target, cache_tmp)
-    cache_tmp.replace(cache_video)
-    atomic_write_json(cache_meta, result)
-    lock.close()
-    return result
 
 
 def resolve(request_path, registry_path=None, do_download=True, do_preflight=True):
-    resolution_started_at = datetime.now(timezone.utc)
-    timer_started = time.monotonic()
-    request = load_json(request_path)
-    registry = load_registry(registry_path or BASE / "media-library" / "backgrounds.json")
-    primary, backup = validate_request_backgrounds(request, registry)
-    target = {"width": TARGET_WIDTH, "height": TARGET_HEIGHT, "fps": TARGET_FPS}
-    failures = []
-    for selection, asset in (("primary", primary), ("backup", backup)):
-        registered = suitable_renditions(
-            asset, target["width"], target["height"], target["fps"]
-        )
-        candidates = [(rendition, False) for rendition in registered]
-        fallback = generic_fallback(asset)
-        if fallback:
-            candidates.append((fallback, True))
-        if not candidates:
-            failures.append(
-                f"{selection} {asset['id']}: no rendition meets the post-crop 1080x1920 quality floor"
-            )
-            continue
-        physical_failures = 0
-        for rendition, is_generic in candidates:
-            if do_preflight:
-                ok, detail, preflight_seconds = preflight(rendition["direct_url"])
-                if not ok:
-                    failures.append(
-                        f"{selection} {asset['id']} rendition {rendition['id']}: {detail}"
-                    )
-                    physical_failures += 1
-                    continue
-            else:
-                detail, preflight_seconds = (
-                    "registry-only resolution; network preflight skipped", 0.0
-                )
-            metrics = {}
-            if do_download:
-                try:
-                    metrics = download(
-                        asset,
-                        rendition,
-                        OUTPUT_DIR / "background.asset",
-                        target["width"],
-                        target["height"],
-                        request.get("planning", {}).get("target_duration_seconds", 175),
-                    )
-                except (subprocess.CalledProcessError, RuntimeError) as exc:
-                    failures.append(
-                        f"{selection} {asset['id']} rendition {rendition['id']}: full download failed: {exc}"
-                    )
-                    physical_failures += 1
-                    continue
-            recorded_rendition = dict(rendition)
-            if metrics.get("source_probe"):
-                recorded_rendition.update({
-                    "width": metrics["source_probe"]["width"],
-                    "height": metrics["source_probe"]["height"],
-                    "fps": metrics["source_probe"]["fps"],
-                    "codec": metrics["source_probe"]["codec"],
-                })
-            recorded_rendition["selection_reason"] = (
-                "controlled_generic_original_fallback"
-                if is_generic
-                else "next_production_suitable_rendition_after_failure"
-                if physical_failures
-                else "lowest_cost_production_suitable_rendition"
-            )
-            result = {
-                "requested_primary_id": primary["id"],
-                "requested_backup_id": backup["id"],
-                "background_asset_id": asset["id"],
-                "background_selection": selection,
-                "source": asset["source"],
-                "source_page": asset["source_page"],
-                "creator": asset.get("creator"),
-                "license": asset["license"],
-                "commercial_use": asset.get("commercial_use"),
-                "attribution_required": asset.get("attribution_required"),
-                "rendition": recorded_rendition,
-                "direct_url": recorded_rendition["direct_url"],
-                "target": target,
-                "rendition_fallback_used": physical_failures > 0,
-                "logical_fallback_used": selection == "backup",
-                "generic_source_fallback_used": is_generic,
-                "readability": metrics.get("readability"),
-                "preflight": detail,
-                "failures_before_selection": list(failures),
-                "metrics": {
-                    "resolution_started_at": resolution_started_at.isoformat(),
-                    "preflight_duration_seconds": preflight_seconds,
-                    "background_resolution_duration_seconds": round(
-                        time.monotonic() - timer_started, 6
-                    ),
-                    **metrics,
-                },
-            }
-            atomic_write_json(OUTPUT_DIR / "background_selection.json", result)
-            print(
-                f"Selected {selection} background {asset['id']} rendition {rendition['id']} "
-                f"({rendition.get('width')}x{rendition.get('height')}): {detail}; "
-                f"generic={is_generic}; physical_fallbacks={physical_failures}"
-            )
-            return result
-    raise RuntimeError(
-        "Both requested background choices failed rendition resolution: "
-        + "; ".join(failures)
+    _sync_base_overrides()
+    result = base.resolve(
+        request_path,
+        registry_path,
+        do_download=do_download,
+        do_preflight=do_preflight,
     )
+    request = load_json(request_path)
+    if request.get("schema_version") != 5:
+        return result
+
+    slot = result["background_selection"]
+    treatment = treatment_for_slot(request, slot)
+    result["background_treatment"] = treatment
+    if not do_download:
+        atomic_write_json(OUTPUT_DIR / "background_selection.json", result)
+        return result
+
+    registry = load_registry(registry_path or BASE / "media-library" / "backgrounds.json")
+    asset = next(
+        (
+            item for item in registry.get("assets", [])
+            if item.get("id") == result["background_asset_id"]
+        ),
+        None,
+    )
+    if asset is None:
+        raise RuntimeError("resolved logical background disappeared from registry")
+
+    metrics = result.setdefault("metrics", {})
+    metrics.setdefault("normalized_background_bytes", metrics.get("render_background_bytes"))
+    metrics.setdefault("normalized_background_sha256", metrics.get("render_background_sha256"))
+    treatment_metrics = apply_background_treatment(
+        OUTPUT_DIR / "background.asset",
+        treatment,
+        asset.get("caption_readability_score"),
+    )
+    result["readability"] = treatment_metrics.pop("readability")
+    metrics.update(treatment_metrics)
+    metrics["render_background_bytes"] = metrics["treated_background_bytes"]
+    metrics["render_background_sha256"] = metrics["treated_background_sha256"]
+    atomic_write_json(OUTPUT_DIR / "background_selection.json", result)
+    print(
+        "Applied immutable background treatment "
+        f"slot={slot} start={treatment['segment_start_seconds']:.3f}s "
+        f"duration={treatment['segment_duration_seconds']} "
+        f"rate={treatment['playback_rate']:.3f}x"
+    )
+    return result
 
 
 def main():
