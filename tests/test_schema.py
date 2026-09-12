@@ -33,11 +33,17 @@ def valid_request():
             "hook": "The Backup He Forgot About",
             "script": (
                 "My boss told the team the file had never existed. "
-                "I opened the archived workspace and found the timestamped copy."
+                "I opened the archived workspace and found the timestamped copy. "
+                "He had deleted the wrong folder."
             ),
             "card_emojis": ["💼", "🗂️", "😳", "💾", "🔥"],
             "lead_gender": "female",
             "story_tone": "natural",
+            "punchline": {
+                "text": "He had deleted the wrong folder.",
+                "emphasis_text": "wrong folder",
+                "type": "REVERSAL",
+            },
         },
         "narration": {"engine": "kokoro", "voice": "af_heart", "speed": 1.75},
         "visual": {
@@ -47,8 +53,8 @@ def valid_request():
         "youtube": {
             "title": selected_title,
             "description": (
-                "My boss said the file never existed—until the archived timestamp "
-                "proved otherwise. Would you have confronted him?"
+                "The archived timestamp changed the whole argument. "
+                "Would you have confronted the person who denied it?"
             ),
             "hashtags": [
                 "#Shorts",
@@ -138,14 +144,12 @@ class RequestSchemaTests(unittest.TestCase):
     def test_immediate_publication_rejects_non_null_publish_at(self):
         data = valid_request()
         data["publication"]["mode"] = "immediate"
-        self.assertTrue(
-            any("must be null" in error for error in validate_request_data(data))
-        )
+        self.assertTrue(any("must be null" in error for error in validate_request_data(data)))
 
-    def test_noncanonical_schema_is_rejected(self):
+    def test_only_schema_v4_is_supported(self):
         data = valid_request()
-        data["schema_version"] = 99
-        self.assertIn("schema_version must be 3 or 4", validate_request_data(data))
+        data["schema_version"] = 3
+        self.assertIn("schema_version must be 4", validate_request_data(data))
 
     def test_publication_and_planning_are_required(self):
         for field in ("publication", "planning"):
@@ -190,6 +194,33 @@ class RequestSchemaTests(unittest.TestCase):
         data = valid_request()
         data["narration"]["voice"] = "am_fenrir"
         self.assertTrue(any("narration.voice" in error for error in validate_request_data(data)))
+
+    def test_punchline_is_required_and_must_match_script(self):
+        data = valid_request()
+        data["story"].pop("punchline")
+        self.assertTrue(any("punchline" in error for error in validate_request_data(data)))
+
+        data = valid_request()
+        data["story"]["punchline"]["text"] = "He deleted a totally different drive."
+        self.assertTrue(any("must occur" in error for error in validate_request_data(data)))
+
+    def test_emphasis_is_short_and_inside_resolved_punchline(self):
+        data = valid_request()
+        data["story"]["punchline"]["emphasis_text"] = "the team the file had never existed"
+        errors = validate_request_data(data)
+        self.assertTrue(any("at most 5 words" in error for error in errors))
+        self.assertTrue(any("inside" in error for error in errors))
+
+    def test_semantic_normalization_accepts_case_and_punctuation(self):
+        data = valid_request()
+        data["story"]["punchline"]["text"] = "HE HAD DELETED THE WRONG FOLDER!"
+        data["story"]["punchline"]["emphasis_text"] = "WRONG FOLDER!"
+        self.assertEqual(validate_request_data(data), [])
+
+    def test_ambiguous_punchline_fails_closed(self):
+        data = valid_request()
+        data["story"]["script"] += " He had deleted the wrong folder."
+        self.assertTrue(any("unambiguous" in error for error in validate_request_data(data)))
 
     def test_fixture_is_isolated_per_call(self):
         first = valid_request()
