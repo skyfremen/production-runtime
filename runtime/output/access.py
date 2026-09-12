@@ -1,9 +1,8 @@
-"""Cheap read-only YouTube readiness preflight for production workflows.
+"""Cheap read-only remote-service readiness preflight for production workflows.
 
-This deliberately reuses the production OAuth/client/channel code. It never
-creates or mutates a YouTube resource; one channels.list request proves token
-refresh, Data API access, and the pinned production channel before expensive
-media/TTS/render work begins.
+This deliberately reuses the production credential/client/identity code. It never
+creates or mutates a remote resource; one read request proves token refresh, API
+access, and the pinned production identity before expensive media work begins.
 """
 import os
 import socket
@@ -12,9 +11,9 @@ from output.state import RecoveryBlocked
 from output.transfer import authenticated_channel, make_client
 
 REQUIRED = (
-    ("RUNTIME_AUTH_A", "YOUTUBE_CLIENT_ID"),
-    ("RUNTIME_AUTH_B", "YOUTUBE_CLIENT_SECRET"),
-    ("RUNTIME_AUTH_C", "YOUTUBE_REFRESH_TOKEN"),
+    "RUNTIME_AUTH_A",
+    "RUNTIME_AUTH_B",
+    "RUNTIME_AUTH_C",
 )
 
 
@@ -29,44 +28,39 @@ def _http_detail(exc):
     elif status == 403:
         kind = "permission/API configuration"
     elif status == 429 or (status is not None and status >= 500):
-        kind = "transient YouTube API"
+        kind = "transient external API"
     else:
-        kind = "YouTube API"
+        kind = "external API"
     return f"{kind} failure" + (f" (HTTP {status})" if status is not None else "")
 
 
 def run_preflight():
-    missing = [
-        primary
-        for primary, legacy in REQUIRED
-        if not str(os.environ.get(primary) or os.environ.get(legacy) or "").strip()
-    ]
+    missing = [name for name in REQUIRED if not str(os.environ.get(name) or "").strip()]
     if missing:
-        raise SystemExit("YouTube credential preflight failed: missing " + ", ".join(missing))
+        raise SystemExit("Credential preflight failed: missing " + ", ".join(missing))
 
     try:
         channel = authenticated_channel(make_client())
     except RecoveryBlocked as exc:
-        raise SystemExit(f"YouTube channel readiness preflight failed: {exc}") from None
+        raise SystemExit(f"Remote identity readiness preflight failed: {exc}") from None
     except (TimeoutError, OSError, socket.timeout) as exc:
         raise SystemExit(
-            f"YouTube readiness preflight failed: transient network failure ({type(exc).__name__})"
+            f"Remote readiness preflight failed: transient network failure ({type(exc).__name__})"
         ) from None
     except Exception as exc:
-        # googleapiclient HttpError exposes resp.status. Avoid importing the Google
-        # package at module import time so this tiny guard remains unit-testable
-        # in the lightweight dry-run environment.
+        # The client library exposes resp.status for API errors. Avoid importing
+        # the external package at module import time so this guard stays easy to test.
         if getattr(getattr(exc, "resp", None), "status", None) is not None:
-            raise SystemExit(f"YouTube readiness preflight failed: {_http_detail(exc)}") from None
-        # OAuth refresh failures commonly surface through google-auth exceptions;
+            raise SystemExit(f"Remote readiness preflight failed: {_http_detail(exc)}") from None
+        # Credential refresh failures commonly surface through client exceptions;
         # preserve the type without leaking credential values.
         raise SystemExit(
-            f"YouTube readiness preflight failed during OAuth/client setup: {type(exc).__name__}: {exc}"
+            f"Remote readiness preflight failed during credential/client setup: {type(exc).__name__}: {exc}"
         ) from None
 
     print(
-        "YouTube readiness preflight OK: OAuth refresh/Data API read succeeded; "
-        f"pinned channel={channel['id']}."
+        "Remote readiness preflight OK: credential refresh/API read succeeded; "
+        f"pinned identity={channel['id']}."
     )
     return channel
 
