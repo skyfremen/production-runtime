@@ -12,7 +12,7 @@ BATCH_RE = re.compile(r"[br]_[0-9a-f]{30}")
 SHA_RE = re.compile(r"[0-9a-f]{40}")
 DISPATCH_RE = re.compile(r"d_[0-9a-f]{24}")
 ALLOWED_STAGES = {"prepared", "unit_started", "unit_produced", "unit_finished", "aggregate_started"}
-PRODUCTION_WORKFLOWS = {"Run", "Single"}
+PRODUCTION_WORKFLOWS = {"Run", "One"}
 
 
 def iso_z():
