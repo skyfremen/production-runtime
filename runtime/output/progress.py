@@ -12,7 +12,6 @@ BATCH_RE = re.compile(r"[br]_[0-9a-f]{30}")
 SHA_RE = re.compile(r"[0-9a-f]{40}")
 DISPATCH_RE = re.compile(r"d_[0-9a-f]{24}")
 ALLOWED_STAGES = {"prepared", "unit_started", "unit_produced", "unit_finished", "aggregate_started"}
-PROGRESS_PREFIX = "youtube-shorts-bot/content/recovery/progress/"
 
 
 def iso_z():
@@ -84,10 +83,10 @@ def record_progress(manifest, stage, shard_index=None):
         state, batch_id, source_sha, run_id, run_attempt, runtime_sha
     )
     suffix = stage if shard_index is None else f"{stage}-{shard_index:02d}"
+    timestamp = iso_z()
     payload = {
         "schema_version": 1,
-        "state": "progress",
-        "stage": stage,
+        "state": "started",
         "batch_id": batch_id,
         "dispatch_id": dispatch_id,
         "source_sha": source_sha,
@@ -95,11 +94,12 @@ def record_progress(manifest, stage, shard_index=None):
         "runtime_commit_sha": runtime_sha,
         "workflow_run_id": run_id,
         "workflow_run_attempt": run_attempt,
+        "started_at": timestamp,
+        "progress_stage": stage,
         "shard_index": shard_index,
-        "progress_at": iso_z(),
     }
     state.create(
-        f"{PROGRESS_PREFIX}{batch_id}/{dispatch_id}/{run_id}-{run_attempt}-{suffix}.json",
+        f"{START_PREFIX}{batch_id}/{dispatch_id}/{run_id}-{run_attempt}-{suffix}.json",
         payload,
         "record opaque runtime progress",
     )
