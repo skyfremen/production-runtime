@@ -148,15 +148,19 @@ def client_for(video_responses):
 
 
 class VerificationTests(unittest.TestCase):
-    def test_missing_marker_tag_does_not_break_durable_video_id_verification(self):
+    def test_missing_marker_tag_remains_pending_and_never_verifies(self):
         request, identity, record, item = fixture()
         item["snippet"].pop("tags")
-        result = verify_video(
-            client_for([[item]]), request, identity, record, sleep=Mock()
-        )
-        self.assertTrue(result["passed"])
-        self.assertEqual(result["state"], "verified_scheduled")
-        self.assertEqual(result["observed_marker_tags"], [])
+        sleep = Mock()
+        with self.assertRaisesRegex(VerificationPending, "bounded"):
+            verify_video(
+                client_for([[item] for _ in RETRY_DELAYS]),
+                request,
+                identity,
+                record,
+                sleep=sleep,
+            )
+        self.assertEqual(sleep.call_count, len(RETRY_DELAYS) - 1)
 
     def test_current_marker_is_observed(self):
         request, identity, record, item = fixture()
