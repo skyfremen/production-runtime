@@ -259,15 +259,33 @@ class ProductionPipeline:
 
     @staticmethod
     def run_command(command, env, log_path):
+        try:
+            timeout = int(env.get("RUNTIME_CHILD_TIMEOUT_SECONDS", "1200"))
+        except (AttributeError, TypeError, ValueError):
+            raise PipelineError(
+                "RUNTIME_CHILD_TIMEOUT_SECONDS must be an integer from 60 to 3600"
+            ) from None
+        if not 60 <= timeout <= 3600:
+            raise PipelineError(
+                "RUNTIME_CHILD_TIMEOUT_SECONDS must be between 60 and 3600 seconds"
+            )
+        label = Path(command[1]).name if len(command) > 1 else command[0]
         started = time.monotonic()
         with Path(log_path).open("a", encoding="utf-8") as log:
             log.write("$ " + " ".join(command) + "\n")
-            completed = subprocess.run(
-                command, env=env, text=True, stdout=log, stderr=subprocess.STDOUT
-            )
+            try:
+                completed = subprocess.run(
+                    command,
+                    env=env,
+                    text=True,
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                    timeout=timeout,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise PipelineError(f"{label} timed out after {timeout}s") from exc
         elapsed = time.monotonic() - started
         if completed.returncode:
-            label = Path(command[1]).name if len(command) > 1 else command[0]
             raise PipelineError(f"{label} exited {completed.returncode}")
         return elapsed
 

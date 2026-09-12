@@ -157,8 +157,10 @@ def resolve_manual_batch(content_ids, *, cwd="."):
     for path in requests:
         try:
             data = _read_json(path)
-        except Exception:
-            continue
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise BatchError(f"Cannot read selected manual request: {path}") from exc
+        if not isinstance(data, dict):
+            raise BatchError(f"Selected manual request must be an object: {path}")
         needed.update(_background_ids(data))
 
     source_dir = Path(SOURCING_PREFIX.rstrip("/"))
@@ -167,13 +169,33 @@ def resolve_manual_batch(content_ids, *, cwd="."):
         for candidate_path in sorted(source_dir.glob("*.json")):
             try:
                 payload = _read_json(candidate_path)
-            except Exception:
-                continue
-            ids_in_manifest = {
-                str(item.get("logical_id"))
-                for item in payload.get("candidates", [])
-                if isinstance(item, dict)
-            }
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise BatchError(
+                    f"Cannot read background sourcing manifest: {candidate_path.as_posix()}"
+                ) from exc
+            if not isinstance(payload, dict):
+                raise BatchError(
+                    f"Background sourcing manifest must be an object: {candidate_path.as_posix()}"
+                )
+            candidates = payload.get("candidates", [])
+            if not isinstance(candidates, list):
+                raise BatchError(
+                    f"Background sourcing candidates must be an array: {candidate_path.as_posix()}"
+                )
+            ids_in_manifest = set()
+            for index, item in enumerate(candidates):
+                if not isinstance(item, dict):
+                    raise BatchError(
+                        f"Background sourcing candidate {index} must be an object: "
+                        f"{candidate_path.as_posix()}"
+                    )
+                logical_id = item.get("logical_id")
+                if not isinstance(logical_id, str) or not logical_id.strip():
+                    raise BatchError(
+                        f"Background sourcing candidate {index} has invalid logical_id: "
+                        f"{candidate_path.as_posix()}"
+                    )
+                ids_in_manifest.add(logical_id.strip())
             if needed & ids_in_manifest:
                 sourcing.append(candidate_path.as_posix())
 
