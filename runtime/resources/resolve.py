@@ -8,21 +8,67 @@ becomes persistent creative state.
 """
 
 import argparse
-import json
 import subprocess
 import time
 from pathlib import Path
 
 from guard.schema import treatment_for_slot
-from resources import resolve_base as base
+from resources import resolve_base as resolve_impl
 from resources.resolve_base import *  # re-export the established resolver surface
+
+_original_preflight = resolve_impl.preflight
+_original_normalize_for_render = resolve_impl.normalize_for_render
+_original_download = resolve_impl.download
 
 
 def _sync_base_overrides():
-    """Preserve existing test/runtime overrides while delegating to resolve_base."""
-    base.OUTPUT_DIR = OUTPUT_DIR
-    base.preflight = preflight
-    base.download = download
+    """Preserve the established resolver's observable/patchable module surface."""
+    resolve_impl.OUTPUT_DIR = OUTPUT_DIR
+    resolve_impl.probe_video = globals()["probe_video"]
+    resolve_impl.normalize_for_render = globals()["normalize_for_render"]
+    resolve_impl.preflight = globals()["preflight"]
+    resolve_impl.download = globals()["download"]
+
+
+def preflight(url):
+    _sync_base_overrides()
+    return _original_preflight(url)
+
+
+def normalize_for_render(
+    target,
+    source_probe,
+    target_width=TARGET_WIDTH,
+    target_height=TARGET_HEIGHT,
+    target_fps=TARGET_FPS,
+):
+    _sync_base_overrides()
+    return _original_normalize_for_render(
+        target,
+        source_probe,
+        target_width,
+        target_height,
+        target_fps,
+    )
+
+
+def download(
+    asset,
+    rendition,
+    target,
+    target_width=TARGET_WIDTH,
+    target_height=TARGET_HEIGHT,
+    segment_duration_seconds=175,
+):
+    _sync_base_overrides()
+    return _original_download(
+        asset,
+        rendition,
+        target,
+        target_width,
+        target_height,
+        segment_duration_seconds,
+    )
 
 
 def _media_duration_seconds(path):
@@ -156,7 +202,7 @@ def apply_background_treatment(target, treatment, caption_score=None):
 
 def resolve(request_path, registry_path=None, do_download=True, do_preflight=True):
     _sync_base_overrides()
-    result = base.resolve(
+    result = resolve_impl.resolve(
         request_path,
         registry_path,
         do_download=do_download,
