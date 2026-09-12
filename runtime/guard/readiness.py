@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 
 from errors import E_AUTH, E_PREPARE, E_RESOURCE
-from output.state import RecoveryBlocked
+from output.state import GitHubState, RecoveryBlocked, index_bootstrap_path
 from output.transfer import authenticated_channel, make_client
 from resources.validate import load_registry
 
@@ -58,6 +58,24 @@ def check_environment(manifest):
         _fail(E_AUTH, False, "environment")
     if manifest.get("sourcing") and not str(os.environ.get("RUNTIME_SOURCE_KEY", "")).strip():
         _fail(E_RESOURCE, False, "source")
+
+
+def check_reconciliation_index():
+    """Verify the private duplicate-upload reconciliation cutover is complete."""
+    try:
+        stored = GitHubState().load(index_bootstrap_path())
+    except RecoveryBlocked:
+        _fail(E_PREPARE, True, "reconciliation_index_unavailable")
+    if stored is None:
+        _fail(E_PREPARE, False, "reconciliation_index_missing")
+    data = stored.data
+    if (
+        not isinstance(data, dict)
+        or data.get("schema_version") != 1
+        or data.get("status") != "complete"
+        or data.get("conflicts") != 0
+    ):
+        _fail(E_PREPARE, False, "reconciliation_index_invalid")
 
 
 def check_runtime_dependencies():
@@ -140,6 +158,7 @@ def check_remote_channel():
 def run_readiness(manifest_path):
     manifest = load_manifest(manifest_path)
     check_environment(manifest)
+    check_reconciliation_index()
     check_runtime_dependencies()
     check_filesystem()
     check_registry(manifest)

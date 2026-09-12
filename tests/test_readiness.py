@@ -3,11 +3,12 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
-from errors import E_AUTH, E_RESOURCE
+from errors import E_AUTH, E_PREPARE, E_RESOURCE
 from guard import readiness
-from output.state import RecoveryBlocked
+from output.state import RecoveryBlocked, index_bootstrap_path
 
 
 class ReadinessTests(unittest.TestCase):
@@ -73,17 +74,60 @@ class ReadinessTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, E_AUTH)
         self.assertFalse(caught.exception.retryable)
 
+    @mock.patch("guard.readiness.GitHubState")
+    def test_reconciliation_index_valid_marker_passes(self, state):
+        state.return_value.load.return_value = SimpleNamespace(data={
+            "schema_version": 1,
+            "status": "complete",
+            "conflicts": 0,
+        })
+        readiness.check_reconciliation_index()
+        state.return_value.load.assert_called_once_with(index_bootstrap_path())
+
+    @mock.patch("guard.readiness.GitHubState")
+    def test_reconciliation_index_missing_is_non_retryable(self, state):
+        state.return_value.load.return_value = None
+        with self.assertRaises(readiness.ReadinessError) as caught:
+            readiness.check_reconciliation_index()
+        self.assertEqual(caught.exception.code, E_PREPARE)
+        self.assertFalse(caught.exception.retryable)
+        self.assertEqual(caught.exception.check, "reconciliation_index_missing")
+
+    @mock.patch("guard.readiness.GitHubState")
+    def test_reconciliation_index_invalid_is_non_retryable(self, state):
+        state.return_value.load.return_value = SimpleNamespace(data={
+            "schema_version": 1,
+            "status": "incomplete",
+            "conflicts": 0,
+        })
+        with self.assertRaises(readiness.ReadinessError) as caught:
+            readiness.check_reconciliation_index()
+        self.assertEqual(caught.exception.code, E_PREPARE)
+        self.assertFalse(caught.exception.retryable)
+        self.assertEqual(caught.exception.check, "reconciliation_index_invalid")
+
+    @mock.patch("guard.readiness.GitHubState")
+    def test_reconciliation_index_read_failure_is_retryable(self, state):
+        state.return_value.load.side_effect = RecoveryBlocked("private state unavailable")
+        with self.assertRaises(readiness.ReadinessError) as caught:
+            readiness.check_reconciliation_index()
+        self.assertEqual(caught.exception.code, E_PREPARE)
+        self.assertTrue(caught.exception.retryable)
+        self.assertEqual(caught.exception.check, "reconciliation_index_unavailable")
+
     def test_shared_runner_calls_all_global_checks(self):
         with tempfile.TemporaryDirectory() as temporary:
             manifest_path = Path(temporary) / "manifest.json"
             manifest_path.write_text(json.dumps(self.manifest()), encoding="utf-8")
             with mock.patch("guard.readiness.check_environment") as environment, \
+                 mock.patch("guard.readiness.check_reconciliation_index") as reconciliation, \
                  mock.patch("guard.readiness.check_runtime_dependencies") as runtime, \
                  mock.patch("guard.readiness.check_filesystem") as filesystem, \
                  mock.patch("guard.readiness.check_registry") as registry, \
                  mock.patch("guard.readiness.check_remote_channel") as remote:
                 readiness.run_readiness(manifest_path)
             environment.assert_called_once()
+            reconciliation.assert_called_once_with()
             runtime.assert_called_once_with()
             filesystem.assert_called_once_with()
             registry.assert_called_once()

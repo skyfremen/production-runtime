@@ -21,7 +21,9 @@ PUBLIC_SUMMARY = Path("/tmp/runtime-public-summary.json")
 PENDING = Path("/tmp/batch-pending-verification.txt")
 INTERNAL_LOG = Path("/tmp/runtime-internal.log")
 DIAGNOSTIC = Path("/tmp/runtime-diagnostic.json")
+WORKER_ROOT = Path("/tmp/runtime-workers")
 PRIVATE_DETAIL_LIMIT = 32_000
+WORKER_LOG_LIMIT = 8_192
 FAILURE_CLASSIFICATION = Path("/tmp/runtime-failure-classification.json")
 
 
@@ -200,15 +202,38 @@ def main():
         )
 
 
+def _worker_log_detail():
+    chunks = []
+    if not WORKER_ROOT.is_dir():
+        return ""
+    for path in sorted(WORKER_ROOT.glob("*/*.log")):
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace").strip()
+        except OSError:
+            continue
+        if not text:
+            continue
+        chunks.append(
+            f"[{path.parent.name}/{path.name}]\n{text[-WORKER_LOG_LIMIT:]}"
+        )
+    return "\n\n".join(chunks)[-PRIVATE_DETAIL_LIMIT:]
+
+
 def record_failure(exc, *, preparation=False):
-    internal_detail = ""
+    private_sections = []
     if INTERNAL_LOG.exists():
         internal_detail = INTERNAL_LOG.read_text(
             encoding="utf-8", errors="replace"
         )[-PRIVATE_DETAIL_LIMIT:]
+        if internal_detail:
+            private_sections.append(internal_detail)
+    worker_detail = _worker_log_detail()
+    if worker_detail:
+        private_sections.append("Worker logs:\n" + worker_detail)
     detail = traceback.format_exc()
-    if internal_detail:
-        detail += "\nPrivate internal detail:\n" + internal_detail
+    if private_sections:
+        detail += "\nPrivate internal detail:\n" + "\n\n".join(private_sections)
+        detail = detail[-(PRIVATE_DETAIL_LIMIT * 2):]
     classification = {}
     if FAILURE_CLASSIFICATION.exists():
         try:
