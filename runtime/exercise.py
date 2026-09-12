@@ -3,17 +3,16 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
-import soundfile as sf
 from PIL import Image
 
 from engine import check as dry_run
 from transform import compose as render
-from transform.align import align_story_words
-from transform.process import CAPTION_ACTIVE_ASS, highlighted_caption_events
-from transform.synth import OnnxKokoroSynthesizer, SAMPLE_RATE
+from transform import process as production_transform
+from transform.synth import OnnxKokoroSynthesizer
 
 PHASE = Path("/tmp/runtime-check-stage")
 
@@ -48,73 +47,143 @@ def write_synthetic_registry():
     target.write_text(json.dumps({"schema_version": 3, "assets": assets}) + "\n")
 
 
-def _render_highlight_smoke(root, words, speech_duration, narration_path):
-    """Render the user-facing preview with the real aligned voice and active-word style."""
-    events, rapid_groups = highlighted_caption_events(words, start_offset=0.0)
-    active_tag = f"{{\\c{CAPTION_ACTIVE_ASS}}}"
-    if not events or not any(active_tag in event for event in events):
-        raise RuntimeError("Word-highlight smoke did not produce an active caption event")
+def _ass_seconds(value):
+    hours, minutes, seconds = str(value).split(":", 2)
+    return (float(hours) * 3600.0) + (float(minutes) * 60.0) + float(seconds)
 
-    ass_path = root / "word-focus-smoke.ass"
-    ass_path.write_text(
-        render.build_ass_header() + "\n".join(events) + "\n",
-        encoding="utf-8",
+
+def _first_active_caption_midpoint(ass_path):
+    active_tag = f"{{\\c{production_transform.CAPTION_ACTIVE_ASS}}}"
+    for line in Path(ass_path).read_text(encoding="utf-8").splitlines():
+        if not line.startswith("Dialogue:") or active_tag not in line:
+            continue
+        parts = line.split(",", 9)
+        if len(parts) != 10:
+            continue
+        start = _ass_seconds(parts[1])
+        end = _ass_seconds(parts[2])
+        if end > start:
+            return (start + end) / 2.0
+    raise RuntimeError("Full visual preview contains no timed active-word caption event")
+
+
+def _count_pixels(image, box, predicate):
+    crop = image.crop(box).convert("RGBA")
+    return sum(1 for pixel in crop.getdata() if predicate(*pixel))
+
+
+def _render_full_visual_preview(root, request_path):
+    """Render the downloadable preview through the shared production transform path."""
+    source = root / "render-smoke"
+    target = root / "visual-preview"
+    target.mkdir()
+    for name in ("background.asset", "background_selection.json"):
+        shutil.copy2(source / name, target / name)
+
+    previous_output_dir = render.OUTPUT_DIR
+    previous_argv = sys.argv[:]
+    previous_caption_events = render.caption_events
+    previous_run_capture = render.run_capture
+    previous_alignment_metadata = production_transform.LAST_ALIGNMENT_METADATA
+    env_keys = (
+        "STORY_TEST_MODE",
+        "STORY_RENDER_MAX_SECONDS",
+        "VIDEO_WIDTH",
+        "VIDEO_HEIGHT",
+        "VIDEO_FPS",
+        "CAPTION_WORD_HIGHLIGHT_ENABLED",
     )
-    output = root / "word-focus-smoke.mp4"
-    duration = max(float(speech_duration) + 0.15, 0.5)
-    render.run_capture([
-        "ffmpeg",
-        "-y",
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-f",
-        "lavfi",
-        "-i",
-        f"color=c=0x355070:s={render.VIDEO_WIDTH}x{render.VIDEO_HEIGHT}:r=30:d={duration:.3f}",
-        "-i",
-        str(narration_path),
-        "-vf",
-        f"subtitles='{ass_path.as_posix()}'",
-        "-map",
-        "0:v:0",
-        "-map",
-        "1:a:0",
-        "-t",
-        f"{duration:.3f}",
-        "-c:v",
-        "libx264",
-        "-preset",
-        render.X264_PRESET,
-        "-crf",
-        str(render.X264_CRF),
-        "-pix_fmt",
-        "yuv420p",
-        "-c:a",
-        "aac",
-        "-ar",
-        "48000",
-        "-b:a",
-        "160k",
-        "-shortest",
-        str(output),
-    ])
-    if not output.exists() or output.stat().st_size < 20_000:
-        raise RuntimeError("Word-highlight smoke render is missing or too small")
+    previous_env = {key: os.environ.get(key) for key in env_keys}
 
-    target = max(words, key=lambda item: len(str(item["word"])))
-    timestamp = (float(target["start"]) + float(target["end"])) / 2.0
-    frame_path = root / "word-focus-frame.png"
-    dry_run._extract_frame(output, timestamp, frame_path)
-    frame = Image.open(frame_path).convert("RGB")
-    yellow = 0
-    for r, g, b in frame.crop((0, 650, render.VIDEO_WIDTH, 1250)).getdata():
-        if r > 175 and g > 130 and b < 145 and r > b + 55 and g > b + 35:
-            yellow += 1
-    if yellow < 20:
-        raise RuntimeError("Word-highlight smoke frame contains no visible active-word colour")
+    try:
+        render.OUTPUT_DIR = target
+        production_transform.LAST_ALIGNMENT_METADATA = {}
+        sys.argv = ["process.py", "--request", str(request_path)]
+        os.environ.update({
+            "STORY_TEST_MODE": "true",
+            "STORY_RENDER_MAX_SECONDS": "5",
+            "VIDEO_WIDTH": "1080",
+            "VIDEO_HEIGHT": "1920",
+            "VIDEO_FPS": "30",
+            "CAPTION_WORD_HIGHLIGHT_ENABLED": "true",
+        })
+        production_transform.main()
+    finally:
+        render.OUTPUT_DIR = previous_output_dir
+        render.caption_events = previous_caption_events
+        render.run_capture = previous_run_capture
+        production_transform.LAST_ALIGNMENT_METADATA = previous_alignment_metadata
+        sys.argv = previous_argv
+        for key, value in previous_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
-    return len(events), rapid_groups, yellow, output
+    output = target / "short.mp4"
+    if not output.exists() or output.stat().st_size < 100_000:
+        raise RuntimeError("Full visual preview is missing or too small")
+
+    metadata = json.loads((target / "render-metadata.json").read_text(encoding="utf-8"))
+    if metadata.get("caption_timing_mode") != "word_aligned":
+        raise RuntimeError("Full visual preview did not use real word alignment")
+    if metadata.get("caption_word_highlight_applied") is not True:
+        raise RuntimeError("Full visual preview did not apply active-word highlighting")
+    if float(metadata.get("caption_alignment_coverage") or 0.0) < 0.90:
+        raise RuntimeError("Full visual preview alignment coverage is below 0.90")
+
+    active_timestamp = _first_active_caption_midpoint(target / "captions.ass")
+    story_start = float(metadata["story_start_seconds"])
+    early_timestamp = max(0.15, min(0.75, story_start - 0.20))
+    early_frame = target / "frame-full-card.png"
+    active_frame = target / "frame-full-caption.png"
+    dry_run._extract_frame(output, early_timestamp, early_frame)
+    dry_run._extract_frame(output, active_timestamp, active_frame)
+
+    early = Image.open(early_frame).convert("RGBA")
+    active = Image.open(active_frame).convert("RGBA")
+
+    card_pixels = _count_pixels(
+        early,
+        render.CARD_BOX,
+        lambda r, g, b, a: a > 180 and r > 215 and g > 215 and b > 215,
+    )
+    if card_pixels < 10_000:
+        raise RuntimeError("Full visual preview opening card is not visibly present")
+
+    handle_pixels = _count_pixels(
+        active,
+        render.HANDLE_PILL,
+        lambda r, g, b, a: a > 180 and r > 205 and g > 205 and b > 205,
+    )
+    if handle_pixels < 20:
+        raise RuntimeError("Full visual preview handle is not visibly present")
+
+    subscribe_pixels = _count_pixels(
+        active,
+        render.SUBSCRIBE_PILL,
+        lambda r, g, b, a: a > 180 and r > 165 and g > 125 and b < 140,
+    )
+    if subscribe_pixels < 20:
+        raise RuntimeError("Full visual preview subscribe treatment is not visibly present")
+
+    highlight_pixels = _count_pixels(
+        active,
+        (0, 650, render.VIDEO_WIDTH, 1250),
+        lambda r, g, b, a: (
+            a > 180 and r > 175 and g > 130 and b < 145
+            and r > b + 55 and g > b + 35
+        ),
+    )
+    if highlight_pixels < 20:
+        raise RuntimeError("Full visual preview contains no visible active-word colour")
+
+    return output, metadata, {
+        "opening_card_light_pixels": card_pixels,
+        "handle_white_pixels": handle_pixels,
+        "subscribe_yellow_pixels": subscribe_pixels,
+        "caption_highlight_yellow_pixels": highlight_pixels,
+    }
 
 
 def main():
@@ -165,9 +234,7 @@ def main():
         )
 
         phase("s03")
-        text = "I didn't blink. No no no. The backup proved it."
         synth = OnnxKokoroSynthesizer()
-        audio, segments, _audio_metrics = synth.synthesize(text, "af_heart", 1.75)
         approved_voices = ("af_heart", "af_bella", "am_echo", "am_fenrir")
         for approved_voice in approved_voices:
             probe_audio, _probe_segments, _probe_metrics = synth.synthesize(
@@ -175,17 +242,9 @@ def main():
             )
             if len(probe_audio) < 2400:
                 raise RuntimeError("Approved narration resource validation failed")
-        narration = root / "model-check.wav"
-        sf.write(narration, audio, SAMPLE_RATE, subtype="PCM_16")
+
         phase("s04")
-        words, alignment = align_story_words(
-            narration, text, segments, 0.0, len(audio) / SAMPLE_RATE
-        )
-        if not words or alignment["caption_alignment_coverage"] < 0.9:
-            raise RuntimeError("Model acceptance did not meet alignment coverage")
-        highlight_events, rapid_groups, yellow_pixels, highlight_preview = _render_highlight_smoke(
-            root, words, len(audio) / SAMPLE_RATE, narration
-        )
+        visual_preview, preview_meta, visual_metrics = _render_full_visual_preview(root, request)
 
         result = {
             "items": 24,
@@ -196,16 +255,17 @@ def main():
             "audio_codec": render_meta["audio_codec"],
             "audio_stream_count": render_meta["audio_stream_count"],
             "tts_backend": synth.backend,
-            "tts_voice": "af_heart",
-            "tts_speed": 1.75,
             "approved_voice_count": len(approved_voices),
             "tts_init_seconds": synth.init_seconds,
-            "alignment_backend": alignment["caption_alignment_backend"],
-            "alignment_coverage": alignment["caption_alignment_coverage"],
-            "caption_highlight_smoke_events": highlight_events,
-            "caption_rapid_highlight_groups": rapid_groups,
-            "caption_highlight_yellow_pixels": yellow_pixels,
-            "validation_preview_mode": "real_tts_word_highlight",
+            "alignment_backend": preview_meta["caption_alignment_backend"],
+            "alignment_coverage": preview_meta["caption_alignment_coverage"],
+            "caption_highlight_smoke_events": preview_meta["caption_word_highlight_event_count"],
+            "caption_rapid_highlight_groups": preview_meta["caption_rapid_highlight_group_count"],
+            "caption_highlight_yellow_pixels": visual_metrics["caption_highlight_yellow_pixels"],
+            "preview_opening_card_pixels": visual_metrics["opening_card_light_pixels"],
+            "preview_handle_pixels": visual_metrics["handle_white_pixels"],
+            "preview_subscribe_pixels": visual_metrics["subscribe_yellow_pixels"],
+            "validation_preview_mode": "full_production_visual_with_word_highlight",
             "validation_count": stage_counts["schema"],
             "upload_count": stage_counts["upload_contract"],
         }
@@ -217,7 +277,7 @@ def main():
         if preview_output:
             preview_target = Path(preview_output)
             preview_target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(highlight_preview, preview_target)
+            shutil.copy2(visual_preview, preview_target)
 
     phase("s05")
     print("Production-equivalent acceptance PASS: items=24")
