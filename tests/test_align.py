@@ -198,12 +198,13 @@ class CaptionAlignmentTests(unittest.TestCase):
 
     def test_punchline_event_replaces_yellow_with_orange_only_while_active(self):
         words = [
-            {"word": "HE", "start": 0.00, "end": 0.20},
-            {"word": "HAD", "start": 0.21, "end": 0.40},
-            {"word": "DELETED", "start": 0.41, "end": 0.68},
-            {"word": "THE", "start": 0.69, "end": 0.84},
-            {"word": "WRONG", "start": 0.85, "end": 1.10},
-            {"word": "FOLDER.", "start": 1.11, "end": 1.38},
+            {"word": "THEN", "start": 0.00, "end": 0.20},
+            {"word": "HE", "start": 0.21, "end": 0.40},
+            {"word": "HAD", "start": 0.41, "end": 0.60},
+            {"word": "DELETED", "start": 0.61, "end": 0.88},
+            {"word": "THE", "start": 0.89, "end": 1.04},
+            {"word": "WRONG", "start": 1.05, "end": 1.30},
+            {"word": "FOLDER.", "start": 1.31, "end": 1.58},
         ]
         resolved = resolve_semantic_span(words, {
             "text": "He had deleted the wrong folder.",
