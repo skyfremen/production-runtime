@@ -60,12 +60,10 @@ class BoundaryTests(unittest.TestCase):
         dry_refs = set(re.findall(r"secrets\.([A-Z0-9_]+)", dry))
         self.assertEqual(dry_refs, {"GITHUB_TOKEN"})
         for forbidden in (
-            "PRIVATE_STATE_TOKEN",
-            "PRIVATE_STATE_REPOSITORY",
-            "YOUTUBE_CLIENT_ID",
-            "YOUTUBE_CLIENT_SECRET",
-            "YOUTUBE_REFRESH_TOKEN",
-            "PEXELS_API_KEY",
+            "YOUTUBE_" + "CLIENT_ID",
+            "YOUTUBE_" + "CLIENT_SECRET",
+            "YOUTUBE_" + "REFRESH_TOKEN",
+            "PEXELS_" + "API_KEY",
         ):
             self.assertNotIn(forbidden, dry)
 
@@ -77,12 +75,12 @@ class BoundaryTests(unittest.TestCase):
                 "GITHUB_TOKEN",
                 "PRIVATE_STATE_TOKEN",
                 "PRIVATE_STATE_REPOSITORY",
-                "YOUTUBE_CLIENT_ID",
-                "YOUTUBE_CLIENT_SECRET",
-                "YOUTUBE_REFRESH_TOKEN",
+                "RUNTIME_AUTH_A",
+                "RUNTIME_AUTH_B",
+                "RUNTIME_AUTH_C",
             },
         )
-        self.assertNotIn("PEXELS_API_KEY", observe)
+        self.assertNotIn("RUNTIME_SOURCE_KEY", observe)
         self.assertIn("python runtime/observe.py", observe)
         self.assertIn("python runtime/state_sink.py", observe)
         for forbidden in ("unittest", "runtime/exercise.py", "runtime/core.py"):
@@ -137,27 +135,28 @@ class BoundaryTests(unittest.TestCase):
         for workflow in (DRY_RUN, OBSERVE, RUN, SINGLE):
             self.assertRegex(workflow.read_text(), digest)
 
-    def test_run_uses_generic_public_environment_aliases(self):
+    def test_run_uses_generic_public_secret_names(self):
         text = RUN.read_text()
         for secret in (
-            "YOUTUBE_CLIENT_ID",
-            "YOUTUBE_CLIENT_SECRET",
-            "YOUTUBE_REFRESH_TOKEN",
-            "PEXELS_API_KEY",
-        ):
-            self.assertIn(f"secrets.{secret}", text)
-        for alias in (
             "RUNTIME_AUTH_A",
             "RUNTIME_AUTH_B",
             "RUNTIME_AUTH_C",
             "RUNTIME_SOURCE_KEY",
         ):
-            self.assertIn(f"{alias}:", text)
+            self.assertIn(f"secrets.{secret}", text)
+            self.assertIn(f"{secret}:", text)
+        for secret in (
+            "YOUTUBE_" + "CLIENT_ID",
+            "YOUTUBE_" + "CLIENT_SECRET",
+            "YOUTUBE_" + "REFRESH_TOKEN",
+            "PEXELS_" + "API_KEY",
+        ):
+            self.assertNotIn(f"secrets.{secret}", text)
         for public_log_key in (
-            "YOUTUBE_CLIENT_ID:",
-            "YOUTUBE_CLIENT_SECRET:",
-            "YOUTUBE_REFRESH_TOKEN:",
-            "PEXELS_API_KEY:",
+            "YOUTUBE_" + "CLIENT_ID:",
+            "YOUTUBE_" + "CLIENT_SECRET:",
+            "YOUTUBE_" + "REFRESH_TOKEN:",
+            "PEXELS_" + "API_KEY:",
             "VIDEO_WIDTH:",
             "VIDEO_HEIGHT:",
             "VIDEO_FPS:",
@@ -165,6 +164,24 @@ class BoundaryTests(unittest.TestCase):
             "SHORTS_CONCURRENCY:",
         ):
             self.assertNotIn(public_log_key, text)
+
+    def test_descriptive_secret_names_are_absent_from_public_text(self):
+        forbidden = (
+            "YOUTUBE_" + "CLIENT_ID",
+            "YOUTUBE_" + "CLIENT_SECRET",
+            "YOUTUBE_" + "REFRESH_TOKEN",
+            "PEXELS_" + "API_KEY",
+        )
+        parts = []
+        for path in ROOT.rglob("*"):
+            if not path.is_file() or ".git" in path.relative_to(ROOT).parts:
+                continue
+            if path.suffix.lower() not in {".py", ".yml", ".yaml", ".md", ".txt"}:
+                continue
+            parts.append(path.read_text(encoding="utf-8"))
+        public_text = "\n".join(parts)
+        for secret in forbidden:
+            self.assertNotIn(secret, public_text)
 
     def test_workflow_display_labels_are_generic(self):
         visible = []
