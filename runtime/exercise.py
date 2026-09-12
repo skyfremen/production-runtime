@@ -48,7 +48,8 @@ def write_synthetic_registry():
     target.write_text(json.dumps({"schema_version": 3, "assets": assets}) + "\n")
 
 
-def _render_highlight_smoke(root, words, speech_duration):
+def _render_highlight_smoke(root, words, speech_duration, narration_path):
+    """Render the user-facing preview with the real aligned voice and active-word style."""
     events, rapid_groups = highlighted_caption_events(words, start_offset=0.0)
     active_tag = f"{{\\c{CAPTION_ACTIVE_ASS}}}"
     if not events or not any(active_tag in event for event in events):
@@ -71,11 +72,16 @@ def _render_highlight_smoke(root, words, speech_duration):
         "lavfi",
         "-i",
         f"color=c=0x355070:s={render.VIDEO_WIDTH}x{render.VIDEO_HEIGHT}:r=30:d={duration:.3f}",
+        "-i",
+        str(narration_path),
         "-vf",
         f"subtitles='{ass_path.as_posix()}'",
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
         "-t",
         f"{duration:.3f}",
-        "-an",
         "-c:v",
         "libx264",
         "-preset",
@@ -84,6 +90,13 @@ def _render_highlight_smoke(root, words, speech_duration):
         str(render.X264_CRF),
         "-pix_fmt",
         "yuv420p",
+        "-c:a",
+        "aac",
+        "-ar",
+        "48000",
+        "-b:a",
+        "160k",
+        "-shortest",
         str(output),
     ])
     if not output.exists() or output.stat().st_size < 20_000:
@@ -101,7 +114,7 @@ def _render_highlight_smoke(root, words, speech_duration):
     if yellow < 20:
         raise RuntimeError("Word-highlight smoke frame contains no visible active-word colour")
 
-    return len(events), rapid_groups, yellow
+    return len(events), rapid_groups, yellow, output
 
 
 def main():
@@ -170,8 +183,8 @@ def main():
         )
         if not words or alignment["caption_alignment_coverage"] < 0.9:
             raise RuntimeError("Model acceptance did not meet alignment coverage")
-        highlight_events, rapid_groups, yellow_pixels = _render_highlight_smoke(
-            root, words, len(audio) / SAMPLE_RATE
+        highlight_events, rapid_groups, yellow_pixels, highlight_preview = _render_highlight_smoke(
+            root, words, len(audio) / SAMPLE_RATE, narration
         )
 
         result = {
@@ -192,6 +205,7 @@ def main():
             "caption_highlight_smoke_events": highlight_events,
             "caption_rapid_highlight_groups": rapid_groups,
             "caption_highlight_yellow_pixels": yellow_pixels,
+            "validation_preview_mode": "real_tts_word_highlight",
             "validation_count": stage_counts["schema"],
             "upload_count": stage_counts["upload_contract"],
         }
@@ -201,10 +215,9 @@ def main():
 
         preview_output = os.environ.get("RUNTIME_PREVIEW_OUTPUT")
         if preview_output:
-            preview_source = root / "render-smoke/short.mp4"
             preview_target = Path(preview_output)
             preview_target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(preview_source, preview_target)
+            shutil.copy2(highlight_preview, preview_target)
 
     phase("s05")
     print("Production-equivalent acceptance PASS: items=24")
