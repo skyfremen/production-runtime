@@ -1,12 +1,26 @@
+import os
+import re
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from transform.align import AlignmentError, group_aligned_words, normalize_token, validate_alignment
-from transform.process import build_caption_events
+from transform.process import (
+    CAPTION_ACTIVE_ASS,
+    build_caption_events,
+    highlighted_caption_events,
+)
+
+
+def strip_ass_overrides(text):
+    parts = text.split(',', 9)
+    payload = parts[9] if len(parts) == 10 else text
+    payload = re.sub(r"\{[^{}]*\}", "", payload)
+    return payload.replace(r"\N", " ")
 
 
 class CaptionAlignmentTests(unittest.TestCase):
@@ -16,7 +30,7 @@ class CaptionAlignmentTests(unittest.TestCase):
         self.assertEqual(normalize_token("24"), "TWENTY|FOUR")
         self.assertEqual(normalize_token("2-hour"), "TWO|HOUR")
 
-    def test_exact_aligned_word_timing_drives_ass_event(self):
+    def test_exact_aligned_word_timing_drives_highlight_events(self):
         def fake_aligner(**_kwargs):
             return [
                 {"word": "FOR", "start": 0.10, "end": 0.22},
@@ -28,13 +42,16 @@ class CaptionAlignmentTests(unittest.TestCase):
             "FOR WEEKS, EVERYONE", [("FOR WEEKS, EVERYONE", 24000)], 1.0,
             start_offset=2.20, narration_path=Path("/tmp/not-used.wav"), aligner=fake_aligner,
         )
-        self.assertEqual(len(events), 1)
+        self.assertEqual(len(events), 3)
         self.assertIn("0:00:02.30", events[0])
-        self.assertIn("0:00:03.02", events[0])
-        self.assertIn("FOR WEEKS, EVERYONE", events[0].replace(r"\N", " "))
+        self.assertIn("0:00:03.02", events[-1])
+        self.assertTrue(all(strip_ass_overrides(event) == "FOR WEEKS, EVERYONE" for event in events))
+        self.assertTrue(all(f"{{\\c{CAPTION_ACTIVE_ASS}}}" in event for event in events))
         self.assertEqual(metadata["caption_timing_mode"], "word_aligned")
         self.assertEqual(metadata["caption_alignment_backend"], "fake-ctc")
         self.assertEqual(metadata["caption_alignment_word_count"], 3)
+        self.assertTrue(metadata["caption_word_highlight_applied"])
+        self.assertEqual(metadata["caption_word_highlight_event_count"], 3)
         self.assertGreaterEqual(metadata["caption_alignment_duration_seconds"], 0)
 
     def test_grouping_prefers_natural_boundaries_over_rigid_three_words(self):
@@ -76,6 +93,8 @@ class CaptionAlignmentTests(unittest.TestCase):
         self.assertIn("0:00:02.80", events[0])
         self.assertEqual(metadata["caption_timing_mode"], "estimated_fallback")
         self.assertEqual(metadata["caption_alignment_word_count"], 0)
+        self.assertFalse(metadata["caption_word_highlight_applied"])
+        self.assertEqual(metadata["caption_word_highlight_event_count"], 0)
         self.assertGreaterEqual(metadata["caption_alignment_duration_seconds"], 0)
         self.assertIn("synthetic failure", metadata["caption_alignment_error"])
 
@@ -94,7 +113,53 @@ class CaptionAlignmentTests(unittest.TestCase):
         self.assertIn("0:00:03.10", events[0])
         self.assertNotIn("0:00:00.00", "\n".join(events))
 
+    def test_contractions_punctuation_and_repeated_words_keep_stable_phrase(self):
+        words = [
+            {"word": "I", "start": 0.00, "end": 0.16},
+            {"word": "DON'T", "start": 0.17, "end": 0.38},
+            {"word": "KNOW.", "start": 0.39, "end": 0.63},
+            {"word": "NO", "start": 0.70, "end": 0.86},
+            {"word": "NO", "start": 0.87, "end": 1.03},
+            {"word": "NO.", "start": 1.04, "end": 1.22},
+        ]
+        events, _rapid = highlighted_caption_events(words)
+        self.assertGreaterEqual(len(events), 5)
+        rendered = [strip_ass_overrides(event) for event in events]
+        self.assertIn("I DON'T KNOW.", rendered)
+        self.assertIn("NO NO NO.", rendered)
+        self.assertTrue(all(f"{{\\c{CAPTION_ACTIVE_ASS}}}" in event for event in events))
+
+    def test_rapid_words_group_at_most_three_words(self):
+        words = [
+            {"word": "NO", "start": 0.00, "end": 0.07},
+            {"word": "NO", "start": 0.08, "end": 0.15},
+            {"word": "NO", "start": 0.16, "end": 0.23},
+            {"word": "WAIT", "start": 0.30, "end": 0.55},
+        ]
+        events, rapid_groups = highlighted_caption_events(words)
+        self.assertEqual(rapid_groups, 1)
+        first = events[0]
+        self.assertEqual(first.count(f"{{\\c{CAPTION_ACTIVE_ASS}}}"), 3)
+        self.assertIn("NO", strip_ass_overrides(first))
+
+    def test_highlighting_can_be_disabled_without_losing_word_aligned_timing(self):
+        def fake_aligner(**_kwargs):
+            return [
+                {"word": "THEN", "start": 0.00, "end": 0.20},
+                {"word": "PAYROLL", "start": 0.21, "end": 0.50},
+            ], {"caption_alignment_backend": "fake-ctc", "caption_alignment_word_count": 2, "caption_alignment_coverage": 1.0}
+
+        with patch.dict(os.environ, {"CAPTION_WORD_HIGHLIGHT_ENABLED": "false"}, clear=False):
+            events, metadata = build_caption_events(
+                "THEN PAYROLL", [("THEN PAYROLL", 12000)], 0.5,
+                narration_path=Path("/tmp/not-used.wav"), aligner=fake_aligner,
+            )
+        self.assertEqual(len(events), 1)
+        self.assertEqual(metadata["caption_timing_mode"], "word_aligned")
+        self.assertFalse(metadata["caption_word_highlight_enabled"])
+        self.assertFalse(metadata["caption_word_highlight_applied"])
+        self.assertNotIn(f"{{\\c{CAPTION_ACTIVE_ASS}}}", events[0])
+
 
 if __name__ == "__main__":
     unittest.main()
-
