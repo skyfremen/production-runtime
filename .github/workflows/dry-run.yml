@@ -15,10 +15,19 @@ on:
       - 'runtime/**'
       - 'tests/**'
   workflow_dispatch:
+    inputs:
+      correlation_id:
+        description: Opaque validation correlation
+        required: false
+        type: string
+      expected_sha:
+        description: Expected runtime revision
+        required: false
+        type: string
 
 concurrency:
-  group: dry-run-${{ github.ref }}
-  cancel-in-progress: true
+  group: dry-run-${{ github.event_name }}-${{ inputs.correlation_id || github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 permissions:
   contents: read
@@ -26,8 +35,9 @@ permissions:
 
 jobs:
   dry-run:
+    name: ${{ inputs.correlation_id != '' && format('dry-run-{0}', inputs.correlation_id) || 'dry-run' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 60
     env:
       RUNTIME_IMAGE: ghcr.io/skyfremen/runtime-base@sha256:6ab68475deb3f0c3e531ff2913da283ceb7e682572acdbd1bff14709b07ffdca
       CHECK_TMP: /tmp/runtime-dry-run
@@ -44,20 +54,103 @@ jobs:
           tar --extract --gzip --file /tmp/runtime-source.tgz \
             --strip-components 1 --directory "${GITHUB_WORKSPACE}"
 
-      - name: Compile
+      - name: Correlation
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        shell: bash
+        env:
+          CORRELATION_ID: ${{ inputs.correlation_id }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          import re
+
+          correlation = os.environ.get('CORRELATION_ID', '')
+          expected = os.environ.get('EXPECTED_SHA', '')
+          actual = os.environ.get('GITHUB_SHA', '')
+          if not correlation and not expected:
+              print('Manual validation without correlation.')
+              raise SystemExit(0)
+          if not re.fullmatch(r'dr_[0-9a-f]{24}', correlation):
+              raise SystemExit('E_DRY_CORRELATION')
+          if not re.fullmatch(r'[0-9a-f]{40}', expected):
+              raise SystemExit('E_DRY_EXPECTED_SHA')
+          if actual != expected:
+              raise SystemExit(f'E_DRY_SHA expected={expected} actual={actual}')
+          print('Correlation PASS')
+          PY
+
+      - name: Resolve validation image
+        id: image
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
         shell: bash
         run: |
+          set -euo pipefail
           mkdir -p "${CHECK_TMP}"
+          python - <<'PY'
+          import json
+          import os
+          import re
+          import urllib.request
+          from pathlib import Path
+
+          event = os.environ.get('GITHUB_EVENT_NAME', '')
+          base = os.environ.get('BASE_SHA', '')
+          head = os.environ.get('GITHUB_SHA', '')
+          repository = os.environ.get('GITHUB_REPOSITORY', '')
+          token = os.environ.get('GH_TOKEN', '')
+          changed = False
+
+          if event in {'push', 'pull_request'}:
+              if not re.fullmatch(r'[0-9a-f]{40}', base) or set(base) == {'0'}:
+                  changed = True
+              else:
+                  url = f'https://api.github.com/repos/{repository}/compare/{base}...{head}'
+                  request = urllib.request.Request(url, headers={
+                      'Authorization': f'Bearer {token}',
+                      'Accept': 'application/vnd.github+json',
+                      'X-GitHub-Api-Version': '2022-11-28',
+                  })
+                  with urllib.request.urlopen(request, timeout=45) as response:
+                      payload = json.load(response)
+                  files = payload.get('files') or []
+                  changed = any(str(item.get('filename', '')).startswith('base/') for item in files)
+                  if len(files) >= 300:
+                      changed = True
+
+          Path('/tmp/base-changed').write_text('1\n' if changed else '0\n', encoding='utf-8')
+          print(f'Candidate base validation required: {changed}')
+          PY
+
           if ! printf '%s' "${GH_TOKEN}" | docker login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin >/dev/null; then
             echo "::error::E_TEST_IMAGE Unable to load the pinned validation environment"
             exit 1
           fi
+          docker pull "${RUNTIME_IMAGE}" >/dev/null
+          validation_image="${RUNTIME_IMAGE}"
+          if [ "$(cat /tmp/base-changed)" = "1" ]; then
+            validation_image="runtime-dry-run-candidate:${GITHUB_SHA}"
+            if ! docker build \
+              --cache-from "${RUNTIME_IMAGE}" \
+              --file base/Dockerfile \
+              --tag "${validation_image}" \
+              .; then
+              echo "::error::E_TEST_BASE Candidate validation image build failed"
+              exit 1
+            fi
+          fi
+          echo "image=${validation_image}" >> "${GITHUB_OUTPUT}"
+
+      - name: Compile
+        shell: bash
+        run: |
           if ! docker run --rm \
             --volume "${GITHUB_WORKSPACE}:/workspace" --workdir /workspace \
             --env PYTHONPATH=runtime --env RUNTIME_COMMIT_SHA="${GITHUB_SHA}" \
-            "${RUNTIME_IMAGE}" bash -lc \
+            "${{ steps.image.outputs.image }}" bash -lc \
             "find base runtime tests -type f -name '*.py' -print0 | xargs -0 python -m py_compile"; then
             echo "::error::E_TEST_COMPILE Python compilation failed"
             exit 1
@@ -69,7 +162,7 @@ jobs:
           if ! docker run --rm \
             --volume "${GITHUB_WORKSPACE}:/workspace" --workdir /workspace \
             --env PYTHONPATH=runtime --env RUNTIME_COMMIT_SHA="${GITHUB_SHA}" \
-            "${RUNTIME_IMAGE}" python -m unittest discover -s tests -v; then
+            "${{ steps.image.outputs.image }}" python -m unittest discover -s tests -v; then
             echo "::error::E_TEST_UNIT Runtime unit tests failed"
             exit 1
           fi
@@ -82,7 +175,7 @@ jobs:
             --volume "${CHECK_TMP}:/tmp" \
             --env PYTHONPATH=runtime --env RUNTIME_COMMIT_SHA="${GITHUB_SHA}" \
             --env RUNTIME_PREVIEW_OUTPUT=/tmp/validation-preview.mp4 \
-            "${RUNTIME_IMAGE}" python runtime/exercise.py \
+            "${{ steps.image.outputs.image }}" python runtime/exercise.py \
             > "${CHECK_TMP}/runtime-exercise.log" 2>&1; then
             echo "Exercise PASS"
           else
