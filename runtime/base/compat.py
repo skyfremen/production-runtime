@@ -5,16 +5,31 @@ import hashlib
 import json
 import re
 
-from base import compat_base as base
-from base.compat_base import *  # re-export established compatibility helpers
+from base import compat_base as compat_impl
 from guard import schema
+from guard import schema_v4
 
-CONTRACT_PROTOCOL_VERSION = base.CONTRACT_PROTOCOL_VERSION
-LEGACY_CONTRACT_HASHES = base.LEGACY_CONTRACT_HASHES
+CONTRACT_PROTOCOL_VERSION = compat_impl.CONTRACT_PROTOCOL_VERSION
+
+
+def _legacy_v4_contract_hash():
+    """Recreate the exact pre-v5 fingerprint for safe staged deployment."""
+    original_schema = compat_impl.schema
+    try:
+        compat_impl.schema = schema_v4
+        return compat_impl.contract_hash()
+    finally:
+        compat_impl.schema = original_schema
+
+
+LEGACY_CONTRACT_HASHES = frozenset({
+    _legacy_v4_contract_hash(),
+    *compat_impl.LEGACY_CONTRACT_HASHES,
+})
 
 
 def contract_payload():
-    payload = copy.deepcopy(base.contract_payload())
+    payload = copy.deepcopy(compat_impl.contract_payload())
     payload["schema"].update({
         "treatment_keys": sorted(schema.TREATMENT_KEYS),
         "playback_rate_min": schema.PLAYBACK_RATE_MIN,
