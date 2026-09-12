@@ -78,6 +78,7 @@ def verify_video(youtube, request, identity, evidence, sleep=time.sleep):
     mode = publication["mode"]
     expected_publish_at = publication["publish_at"]
     expected_dt = _instant(expected_publish_at)
+    marker = marker_tag(identity["content_id"])
 
     last = "video not visible"
     observations = []
@@ -126,6 +127,14 @@ def verify_video(youtube, request, identity, evidence, sleep=time.sleep):
             )
             continue
 
+        tags = snippet.get("tags", [])
+        if marker not in tags:
+            last = "recovery marker not propagated"
+            observations.append(
+                {"attempt": attempt, "observed_at": now(), "state": last}
+            )
+            continue
+
         privacy = status.get("privacyStatus")
         remote_publish_at = status.get("publishAt")
         publish_at_absent = "publishAt" not in status
@@ -169,8 +178,6 @@ def verify_video(youtube, request, identity, evidence, sleep=time.sleep):
         else:
             raise RecoveryBlocked("Scheduled video has an unexpected privacy state")
 
-        marker = marker_tag(identity["content_id"])
-        observed_marker_tags = [marker] if marker in snippet.get("tags", []) else []
         return {
             "passed": True,
             "state": verification_state,
@@ -185,8 +192,8 @@ def verify_video(youtube, request, identity, evidence, sleep=time.sleep):
             "publish_at": verified_publish_at,
             "publish_at_absent": publish_at_absent,
             "upload_status": status["uploadStatus"],
-            "association_method": "immutable_github_upload_record",
-            "observed_marker_tags": observed_marker_tags,
+            "association_method": "immutable_github_upload_record+remote_marker",
+            "observed_marker_tags": [marker],
             "attempts": attempt,
             "prior_observations": observations,
         }
@@ -216,7 +223,7 @@ def main():
             "publish_at_absent": verification["publish_at_absent"],
             "youtube_verified_at": verification["verified_at"],
             "verification": verification,
-            "content_id_tag_verified": bool(verification["observed_marker_tags"]),
+            "content_id_tag_verified": True,
         }
     )
     atomic_write_json(path, upload)
