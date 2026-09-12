@@ -20,8 +20,9 @@ CURRENT_PUNCHLINE = None
 
 CAPTION_ACTIVE_ASS = "&H0028D6FF&"  # RGB #FFD628 in ASS BGR order.
 CAPTION_BASE_ASS = "&H00FFFFFF&"
-CAPTION_PUNCHLINE_ASS = "&H00E8F4FF&"  # RGB #FFF4E8.
-CAPTION_EMPHASIS_ASS = "&H001C9FFF&"  # RGB #FF9F1C.
+CAPTION_PUNCHLINE_ASS = "&H001C9FFF&"  # RGB #FF9F1C; active punchline only.
+CAPTION_EMPHASIS_ASS = CAPTION_PUNCHLINE_ASS  # Compatibility alias for diagnostics.
+CAPTION_PUNCHLINE_ACTIVE_OUTLINE = render.CAPTION_OUTLINE + 2
 CAPTION_RAPID_WORD_SECONDS = 0.12
 CAPTION_RAPID_GAP_SECONDS = 0.04
 CAPTION_RAPID_MAX_WORDS = 3
@@ -94,29 +95,26 @@ def _caption_ass_focus_text(
     wrapped, event_font_size = render.caption_layout(" ".join(words))
     active = set(active_indices)
     punchline = set(punchline_indices)
-    emphasis = set(emphasis_indices)
     rendered_lines = []
     cursor = 0
     for line in wrapped.splitlines():
         rendered_words = []
         for token in line.split():
             payload = render.escape_ass(token)
-            tags = []
-            semantic = False
-            if cursor in punchline:
-                tags.extend([f"\\c{CAPTION_PUNCHLINE_ASS}", "\\bord10"])
-                semantic = True
-            if cursor in emphasis:
-                tags.extend([f"\\c{CAPTION_EMPHASIS_ASS}", "\\bord12"])
-                semantic = True
             if cursor in active:
-                tags.append(f"\\c{CAPTION_ACTIVE_ASS}")
-            if tags:
-                payload = "{" + "".join(tags) + "}" + payload
-                reset = f"\\c{CAPTION_BASE_ASS}"
-                if semantic:
-                    reset += f"\\bord{render.CAPTION_OUTLINE}"
-                payload += "{" + reset + "}"
+                if cursor in punchline:
+                    tags = (
+                        f"\\c{CAPTION_PUNCHLINE_ASS}"
+                        f"\\bord{CAPTION_PUNCHLINE_ACTIVE_OUTLINE}"
+                    )
+                    reset = (
+                        f"\\c{CAPTION_BASE_ASS}"
+                        f"\\bord{render.CAPTION_OUTLINE}"
+                    )
+                else:
+                    tags = f"\\c{CAPTION_ACTIVE_ASS}"
+                    reset = f"\\c{CAPTION_BASE_ASS}"
+                payload = "{" + tags + "}" + payload + "{" + reset + "}"
             rendered_words.append(payload)
             cursor += 1
         rendered_lines.append(" ".join(rendered_words))
@@ -188,36 +186,27 @@ def aligned_caption_events(words, start_offset=0.0):
     return events
 
 
-def _semantic_local_state(resolution, group_global_start, group_length, at_time):
+def _semantic_local_punchline_indices(
+    resolution,
+    group_global_start,
+    group_length,
+):
     if resolution.get("status") != "matched":
-        return (), ()
-    punchline = ()
-    emphasis = ()
-    p_start = resolution.get("punchline_start")
-    p_end = resolution.get("punchline_end")
-    e_start = resolution.get("emphasis_start")
-    e_end = resolution.get("emphasis_end")
-    if p_start is not None and p_end is not None and p_start <= at_time < p_end:
-        punchline = tuple(
-            index - group_global_start
-            for index in resolution["punchline_indices"]
-            if group_global_start <= index < group_global_start + group_length
-        )
-    if e_start is not None and e_end is not None and e_start <= at_time < e_end:
-        emphasis = tuple(
-            index - group_global_start
-            for index in resolution["emphasis_indices"]
-            if group_global_start <= index < group_global_start + group_length
-        )
-    return punchline, emphasis
+        return ()
+    return tuple(
+        index - group_global_start
+        for index in resolution["punchline_indices"]
+        if group_global_start <= index < group_global_start + group_length
+    )
 
 
 def _semantic_split_before(resolution, group_global_start, group_length):
     if resolution.get("status") != "matched":
         return ()
-    p = sorted(resolution["punchline_indices"])
-    e = sorted(resolution["emphasis_indices"])
-    boundaries = {p[0], p[-1] + 1, e[0], e[-1] + 1}
+    punchline = sorted(resolution["punchline_indices"])
+    if not punchline:
+        return ()
+    boundaries = {punchline[0], punchline[-1] + 1}
     return tuple(
         boundary - group_global_start
         for boundary in boundaries
@@ -254,17 +243,10 @@ def highlighted_caption_events(words, start_offset=0.0, semantic_resolution=None
         for unit_index, (first, last, unit_start, unit_end) in enumerate(units):
             unit_start = max(cursor, unit_start)
             if unit_start - cursor > CAPTION_TINY_GAP_SECONDS:
-                punchline, emphasis = _semantic_local_state(
-                    semantic_resolution, group_global_start, len(group), cursor
-                )
                 event = _dialogue(
                     cursor,
                     unit_start,
-                    _caption_ass_focus_text(
-                        group,
-                        punchline_indices=punchline,
-                        emphasis_indices=emphasis,
-                    ),
+                    _caption_ass_focus_text(group),
                     start_offset=start_offset,
                 )
                 if event:
@@ -281,8 +263,8 @@ def highlighted_caption_events(words, start_offset=0.0, semantic_resolution=None
             elif group_end - unit_end <= CAPTION_TINY_GAP_SECONDS:
                 unit_end = group_end
 
-            punchline, emphasis = _semantic_local_state(
-                semantic_resolution, group_global_start, len(group), unit_start
+            punchline = _semantic_local_punchline_indices(
+                semantic_resolution, group_global_start, len(group)
             )
             event = _dialogue(
                 unit_start,
@@ -291,7 +273,6 @@ def highlighted_caption_events(words, start_offset=0.0, semantic_resolution=None
                     group,
                     range(first, last + 1),
                     punchline_indices=punchline,
-                    emphasis_indices=emphasis,
                 ),
                 start_offset=start_offset,
             )
@@ -300,17 +281,10 @@ def highlighted_caption_events(words, start_offset=0.0, semantic_resolution=None
             cursor = max(cursor, unit_end)
 
         if group_end - cursor > CAPTION_TINY_GAP_SECONDS:
-            punchline, emphasis = _semantic_local_state(
-                semantic_resolution, group_global_start, len(group), cursor
-            )
             event = _dialogue(
                 cursor,
                 group_end,
-                _caption_ass_focus_text(
-                    group,
-                    punchline_indices=punchline,
-                    emphasis_indices=emphasis,
-                ),
+                _caption_ass_focus_text(group),
                 start_offset=start_offset,
             )
             if event:

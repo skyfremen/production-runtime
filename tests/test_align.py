@@ -13,6 +13,7 @@ from transform.process import (
     CAPTION_ACTIVE_ASS,
     CAPTION_EMPHASIS_ASS,
     CAPTION_PUNCHLINE_ASS,
+    CAPTION_PUNCHLINE_ACTIVE_OUTLINE,
     _caption_ass_focus_text,
     build_caption_events,
     highlighted_caption_events,
@@ -172,7 +173,7 @@ class CaptionAlignmentTests(unittest.TestCase):
         self.assertAlmostEqual(resolved["emphasis_start"], 0.64)
         self.assertAlmostEqual(resolved["emphasis_end"], 1.16)
 
-    def test_semantic_styling_does_not_change_caption_text_or_wrapping(self):
+    def test_active_punchline_uses_orange_without_yellow_or_reflow(self):
         group = [
             {"word": "HE", "start": 0.0, "end": 0.1},
             {"word": "DELETED", "start": 0.1, "end": 0.3},
@@ -180,17 +181,46 @@ class CaptionAlignmentTests(unittest.TestCase):
             {"word": "WRONG", "start": 0.4, "end": 0.6},
             {"word": "FOLDER.", "start": 0.6, "end": 0.8},
         ]
-        plain = _caption_ass_focus_text(group, active_indices=(3,))
-        semantic = _caption_ass_focus_text(
+        ordinary = _caption_ass_focus_text(group, active_indices=(3,))
+        punchline = _caption_ass_focus_text(
             group,
             active_indices=(3,),
             punchline_indices=range(5),
             emphasis_indices=(3, 4),
         )
-        self.assertEqual(strip_ass_overrides(plain), strip_ass_overrides(semantic))
-        self.assertIn(CAPTION_PUNCHLINE_ASS, semantic)
-        self.assertIn(CAPTION_EMPHASIS_ASS, semantic)
-        self.assertIn(CAPTION_ACTIVE_ASS, semantic)
+        self.assertEqual(strip_ass_overrides(ordinary), strip_ass_overrides(punchline))
+        self.assertIn(CAPTION_ACTIVE_ASS, ordinary)
+        self.assertNotIn(CAPTION_PUNCHLINE_ASS, ordinary)
+        self.assertIn(CAPTION_PUNCHLINE_ASS, punchline)
+        self.assertNotIn(CAPTION_ACTIVE_ASS, punchline)
+        self.assertEqual(punchline.count(CAPTION_PUNCHLINE_ASS), 1)
+        self.assertIn(f"\\bord{CAPTION_PUNCHLINE_ACTIVE_OUTLINE}", punchline)
+
+    def test_punchline_event_replaces_yellow_with_orange_only_while_active(self):
+        words = [
+            {"word": "THEN", "start": 0.00, "end": 0.20},
+            {"word": "HE", "start": 0.21, "end": 0.40},
+            {"word": "HAD", "start": 0.41, "end": 0.60},
+            {"word": "DELETED", "start": 0.61, "end": 0.88},
+            {"word": "THE", "start": 0.89, "end": 1.04},
+            {"word": "WRONG", "start": 1.05, "end": 1.30},
+            {"word": "FOLDER.", "start": 1.31, "end": 1.58},
+        ]
+        resolved = resolve_semantic_span(words, {
+            "text": "He had deleted the wrong folder.",
+            "emphasis_text": "wrong folder",
+            "type": "REVERSAL",
+        })
+        events, _rapid = highlighted_caption_events(words, semantic_resolution=resolved)
+        orange_events = [event for event in events if CAPTION_PUNCHLINE_ASS in event]
+        yellow_events = [event for event in events if CAPTION_ACTIVE_ASS in event]
+        self.assertTrue(orange_events)
+        self.assertTrue(yellow_events)
+        self.assertTrue(all(CAPTION_ACTIVE_ASS not in event for event in orange_events))
+        self.assertTrue(all(
+            f"\\bord{CAPTION_PUNCHLINE_ACTIVE_OUTLINE}" in event
+            for event in orange_events
+        ))
 
     def test_semantic_match_failure_keeps_real_alignment_and_word_highlight(self):
         def fake_aligner(**_kwargs):
