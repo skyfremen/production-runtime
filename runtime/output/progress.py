@@ -6,10 +6,16 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
-from transport import PrivateState, TransportError, START_PREFIX
+from transport import (
+    DISPATCH_INTENT_PREFIX,
+    START_PREFIX,
+    PrivateState,
+    TransportError,
+)
 
 BATCH_RE = re.compile(r"[br]_[0-9a-f]{30}")
 SHA_RE = re.compile(r"[0-9a-f]{40}")
+CONTRACT_RE = re.compile(r"[0-9a-f]{64}")
 DISPATCH_RE = re.compile(r"d_[0-9a-f]{24}")
 ALLOWED_STAGES = {"prepared", "unit_started", "unit_produced", "unit_finished", "aggregate_started"}
 PRODUCTION_WORKFLOWS = {"Run", "One"}
@@ -17,6 +23,17 @@ PRODUCTION_WORKFLOWS = {"Run", "One"}
 
 def iso_z():
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _valid_timestamp(value):
+    raw = str(value or "")
+    if not raw.endswith("Z"):
+        return False
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return parsed.utcoffset() is not None
 
 
 def _identity(manifest):
@@ -36,7 +53,7 @@ def _identity(manifest):
     return batch_id, source_sha, run_id, run_attempt, runtime_sha
 
 
-def _matching_start(state, batch_id, source_sha, run_id, run_attempt, runtime_sha):
+def _dispatch_ids(state, batch_id):
     root = f"{START_PREFIX}{batch_id}"
     try:
         entries = state.api(f"contents/{root}?ref=main")
@@ -44,28 +61,195 @@ def _matching_start(state, batch_id, source_sha, run_id, run_attempt, runtime_sh
         raise TransportError("Runtime START evidence is unavailable") from None
     if not isinstance(entries, list):
         raise TransportError("Runtime START evidence is unavailable")
+    return sorted(
+        str(entry.get("name", ""))
+        for entry in entries
+        if entry.get("type") == "dir" and DISPATCH_RE.fullmatch(str(entry.get("name", "")))
+    )
+
+
+def _read_json(state, path):
+    try:
+        raw, _sha = state.current_content(path)
+        return json.loads(raw)
+    except (TransportError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+
+
+def _start_matches(
+    payload,
+    *,
+    batch_id,
+    dispatch_id,
+    source_sha,
+    run_id,
+    run_attempt,
+    runtime_sha,
+    contract_hash=None,
+):
+    if not isinstance(payload, dict):
+        return False
+    observed_contract = str(payload.get("contract_hash", ""))
+    return (
+        payload.get("schema_version") == 1
+        and payload.get("state") == "started"
+        and payload.get("batch_id") == batch_id
+        and payload.get("dispatch_id") == dispatch_id
+        and payload.get("source_sha") == source_sha
+        and CONTRACT_RE.fullmatch(observed_contract) is not None
+        and (contract_hash is None or observed_contract == contract_hash)
+        and payload.get("runtime_commit_sha") == runtime_sha
+        and str(payload.get("workflow_run_id", "")) == run_id
+        and str(payload.get("workflow_run_attempt", "")) == str(run_attempt)
+        and _valid_timestamp(payload.get("started_at"))
+    )
+
+
+def _current_start_matches(state, dispatch_ids, batch_id, source_sha, run_id, run_attempt, runtime_sha):
     matches = []
-    for entry in entries:
-        dispatch_id = str(entry.get("name", ""))
-        if entry.get("type") != "dir" or not DISPATCH_RE.fullmatch(dispatch_id):
-            continue
+    for dispatch_id in dispatch_ids:
         path = f"{START_PREFIX}{batch_id}/{dispatch_id}/{run_id}-{run_attempt}.json"
-        try:
-            raw, _sha = state.current_content(path)
-            payload = json.loads(raw)
-        except (TransportError, UnicodeDecodeError, json.JSONDecodeError):
-            continue
-        if (
-            payload.get("schema_version") == 1
-            and payload.get("state") == "started"
-            and payload.get("batch_id") == batch_id
-            and payload.get("dispatch_id") == dispatch_id
-            and payload.get("source_sha") == source_sha
-            and payload.get("runtime_commit_sha") == runtime_sha
-            and str(payload.get("workflow_run_id", "")) == run_id
-            and str(payload.get("workflow_run_attempt", "")) == run_attempt
+        payload = _read_json(state, path)
+        if _start_matches(
+            payload,
+            batch_id=batch_id,
+            dispatch_id=dispatch_id,
+            source_sha=source_sha,
+            run_id=run_id,
+            run_attempt=run_attempt,
+            runtime_sha=runtime_sha,
         ):
             matches.append((dispatch_id, payload))
+    return matches
+
+
+def _validate_dispatch_intent(state, batch_id, dispatch_id, source_sha, contract_hash):
+    path = f"{DISPATCH_INTENT_PREFIX}{batch_id}/{dispatch_id}.json"
+    intent = _read_json(state, path)
+    expected = {
+        "schema_version": 1,
+        "state": "prepared",
+        "batch_id": batch_id,
+        "dispatch_id": dispatch_id,
+        "source_sha": source_sha,
+        "contract_hash": contract_hash,
+    }
+    if not isinstance(intent, dict) or any(intent.get(key) != value for key, value in expected.items()):
+        raise TransportError("Prepared dispatch evidence does not match rerun execution")
+
+
+def _matching_prior_start(state, dispatch_ids, batch_id, source_sha, run_id, run_attempt, runtime_sha):
+    current_attempt = int(run_attempt)
+    if current_attempt <= 1:
+        raise TransportError("Runtime progress requires one exact START record")
+    for prior_attempt in range(current_attempt - 1, 0, -1):
+        matches = []
+        for dispatch_id in dispatch_ids:
+            path = f"{START_PREFIX}{batch_id}/{dispatch_id}/{run_id}-{prior_attempt}.json"
+            payload = _read_json(state, path)
+            if _start_matches(
+                payload,
+                batch_id=batch_id,
+                dispatch_id=dispatch_id,
+                source_sha=source_sha,
+                run_id=run_id,
+                run_attempt=str(prior_attempt),
+                runtime_sha=runtime_sha,
+            ):
+                matches.append((dispatch_id, payload))
+        if len(matches) > 1:
+            raise TransportError("Runtime rerun START evidence is ambiguous")
+        if len(matches) == 1:
+            dispatch_id, payload = matches[0]
+            contract_hash = str(payload["contract_hash"])
+            _validate_dispatch_intent(
+                state,
+                batch_id,
+                dispatch_id,
+                source_sha,
+                contract_hash,
+            )
+            return dispatch_id, payload
+    raise TransportError("Runtime progress requires one exact START record")
+
+
+def _ensure_rerun_start(state, dispatch_ids, batch_id, source_sha, run_id, run_attempt, runtime_sha):
+    dispatch_id, prior = _matching_prior_start(
+        state,
+        dispatch_ids,
+        batch_id,
+        source_sha,
+        run_id,
+        run_attempt,
+        runtime_sha,
+    )
+    contract_hash = str(prior["contract_hash"])
+    path = f"{START_PREFIX}{batch_id}/{dispatch_id}/{run_id}-{run_attempt}.json"
+    payload = {
+        "schema_version": 1,
+        "state": "started",
+        "batch_id": batch_id,
+        "dispatch_id": dispatch_id,
+        "source_sha": source_sha,
+        "contract_hash": contract_hash,
+        "runtime_commit_sha": runtime_sha,
+        "workflow_run_id": run_id,
+        "workflow_run_attempt": run_attempt,
+        "started_at": iso_z(),
+    }
+    try:
+        state.create(path, payload, "record opaque runtime start")
+    except TransportError:
+        # Multiple matrix jobs may discover the same missing rerun START concurrently.
+        # Accept only an already-created record with the exact immutable identity;
+        # its timestamp may differ because another worker won the race.
+        existing = _read_json(state, path)
+        if not _start_matches(
+            existing,
+            batch_id=batch_id,
+            dispatch_id=dispatch_id,
+            source_sha=source_sha,
+            run_id=run_id,
+            run_attempt=run_attempt,
+            runtime_sha=runtime_sha,
+            contract_hash=contract_hash,
+        ):
+            raise
+    print("Start PASS: rerun attempt")
+
+
+def _matching_start(state, batch_id, source_sha, run_id, run_attempt, runtime_sha):
+    dispatch_ids = _dispatch_ids(state, batch_id)
+    matches = _current_start_matches(
+        state,
+        dispatch_ids,
+        batch_id,
+        source_sha,
+        run_id,
+        run_attempt,
+        runtime_sha,
+    )
+    if len(matches) > 1:
+        raise TransportError("Runtime progress requires one exact START record")
+    if not matches:
+        _ensure_rerun_start(
+            state,
+            dispatch_ids,
+            batch_id,
+            source_sha,
+            run_id,
+            run_attempt,
+            runtime_sha,
+        )
+        matches = _current_start_matches(
+            state,
+            dispatch_ids,
+            batch_id,
+            source_sha,
+            run_id,
+            run_attempt,
+            runtime_sha,
+        )
     if len(matches) != 1:
         raise TransportError("Runtime progress requires one exact START record")
     return matches[0]
