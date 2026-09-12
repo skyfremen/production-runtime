@@ -8,10 +8,25 @@ executed segment/playback treatment exactly matches the selected request slot.
 import copy
 
 from guard.schema import treatment_for_slot
-from output import receipt_base as base
+from output import receipt_base as receipt_impl
 from output.receipt_base import *  # re-export the established receipt surface
 
-_legacy_build_receipt = base.build_receipt
+_legacy_build_receipt = receipt_impl.build_receipt
+
+
+def _sync_legacy_overrides():
+    """Keep the established receipt module observable/patchable through this facade."""
+    for name in (
+        "workflow_identity",
+        "GitHubState",
+        "identity_for",
+        "OUTPUT_DIR",
+        "atomic_write_json",
+        "ensure_request_path_matches",
+        "load_json",
+    ):
+        if name in globals():
+            setattr(receipt_impl, name, globals()[name])
 
 
 def _same_treatment(left, right):
@@ -37,6 +52,7 @@ def _same_treatment(left, right):
 
 
 def build_receipt(request_path, request, upload, selection, render_meta):
+    _sync_legacy_overrides()
     version = request.get("schema_version")
     if version == 4:
         return _legacy_build_receipt(
@@ -45,10 +61,6 @@ def build_receipt(request_path, request, upload, selection, render_meta):
     if version != 5:
         raise RecoveryBlocked("Only schema-v4/v5 requests can produce receipts")
 
-    # Reuse all established identity/upload/verification/render invariants. The
-    # legacy implementation sees only its supported version marker; request bytes,
-    # immutable path identity and the selected background evidence remain the real
-    # v5 values throughout verification.
     legacy_request = copy.deepcopy(request)
     legacy_request["schema_version"] = 4
     candidate = _legacy_build_receipt(
@@ -77,10 +89,9 @@ def build_receipt(request_path, request, upload, selection, render_meta):
 
 
 def main():
-    # receipt_base.main owns persistence/idempotency. Inject the version-aware
-    # builder without duplicating any durable-state logic.
-    base.build_receipt = build_receipt
-    return base.main()
+    _sync_legacy_overrides()
+    receipt_impl.build_receipt = build_receipt
+    return receipt_impl.main()
 
 
 if __name__ == "__main__":
