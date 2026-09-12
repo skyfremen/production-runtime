@@ -7,9 +7,12 @@ import tempfile
 from pathlib import Path
 
 import soundfile as sf
+from PIL import Image
 
 from engine import check as dry_run
+from transform import compose as render
 from transform.align import align_story_words
+from transform.process import CAPTION_ACTIVE_ASS, highlighted_caption_events
 from transform.synth import OnnxKokoroSynthesizer, SAMPLE_RATE
 
 PHASE = Path("/tmp/runtime-check-stage")
@@ -43,6 +46,62 @@ def write_synthetic_registry():
     target = Path(__file__).resolve().parent / "media-library/backgrounds.json"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps({"schema_version": 3, "assets": assets}) + "\n")
+
+
+def _render_highlight_smoke(root, words, speech_duration):
+    events, rapid_groups = highlighted_caption_events(words, start_offset=0.0)
+    active_tag = f"{{\\c{CAPTION_ACTIVE_ASS}}}"
+    if not events or not any(active_tag in event for event in events):
+        raise RuntimeError("Word-highlight smoke did not produce an active caption event")
+
+    ass_path = root / "word-focus-smoke.ass"
+    ass_path.write_text(
+        render.build_ass_header() + "\n".join(events) + "\n",
+        encoding="utf-8",
+    )
+    output = root / "word-focus-smoke.mp4"
+    duration = max(float(speech_duration) + 0.15, 0.5)
+    render.run_capture([
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        f"color=c=0x355070:s={render.VIDEO_WIDTH}x{render.VIDEO_HEIGHT}:r=30:d={duration:.3f}",
+        "-vf",
+        f"subtitles='{ass_path.as_posix()}'",
+        "-t",
+        f"{duration:.3f}",
+        "-an",
+        "-c:v",
+        "libx264",
+        "-preset",
+        render.X264_PRESET,
+        "-crf",
+        str(render.X264_CRF),
+        "-pix_fmt",
+        "yuv420p",
+        str(output),
+    ])
+    if not output.exists() or output.stat().st_size < 20_000:
+        raise RuntimeError("Word-highlight smoke render is missing or too small")
+
+    target = max(words, key=lambda item: len(str(item["word"])))
+    timestamp = (float(target["start"]) + float(target["end"])) / 2.0
+    frame_path = root / "word-focus-frame.png"
+    dry_run._extract_frame(output, timestamp, frame_path)
+    frame = Image.open(frame_path).convert("RGB")
+    yellow = 0
+    for r, g, b in frame.crop((0, 650, render.VIDEO_WIDTH, 1250)).getdata():
+        if r > 175 and g > 130 and b < 145 and r > b + 55 and g > b + 35:
+            yellow += 1
+    if yellow < 20:
+        raise RuntimeError("Word-highlight smoke frame contains no visible active-word colour")
+
+    return len(events), rapid_groups, yellow
 
 
 def main():
@@ -93,7 +152,7 @@ def main():
         )
 
         phase("s03")
-        text = "The backup proved it."
+        text = "I didn't blink. No no no. The backup proved it."
         synth = OnnxKokoroSynthesizer()
         audio, segments, _audio_metrics = synth.synthesize(text, "af_heart", 1.75)
         approved_voices = ("af_heart", "af_bella", "am_echo", "am_fenrir")
@@ -111,6 +170,9 @@ def main():
         )
         if not words or alignment["caption_alignment_coverage"] < 0.9:
             raise RuntimeError("Model acceptance did not meet alignment coverage")
+        highlight_events, rapid_groups, yellow_pixels = _render_highlight_smoke(
+            root, words, len(audio) / SAMPLE_RATE
+        )
 
         result = {
             "items": 24,
@@ -127,6 +189,9 @@ def main():
             "tts_init_seconds": synth.init_seconds,
             "alignment_backend": alignment["caption_alignment_backend"],
             "alignment_coverage": alignment["caption_alignment_coverage"],
+            "caption_highlight_smoke_events": highlight_events,
+            "caption_rapid_highlight_groups": rapid_groups,
+            "caption_highlight_yellow_pixels": yellow_pixels,
             "validation_count": stage_counts["schema"],
             "upload_count": stage_counts["upload_contract"],
         }
