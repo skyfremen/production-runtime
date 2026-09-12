@@ -6,6 +6,7 @@ from pathlib import Path
 from engine.batch import ordered_manifest_requests
 from engine.shard import select_shard, shard_plan
 from errors import E_EXEC
+from output.progress import record_progress
 
 PUBLIC_SUMMARY = Path("/tmp/runtime-public-summary.json")
 DIAGNOSTIC = Path("/tmp/runtime-diagnostic.json")
@@ -113,6 +114,7 @@ def main():
     parser.add_argument("--profile", choices=("paired", "single"), required=True)
     args = parser.parse_args()
     manifest = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
+    record_progress(manifest, "aggregate_started")
     summary = aggregate_summaries(manifest, args.results, args.profile)
     PUBLIC_SUMMARY.write_text(json.dumps(summary, sort_keys=True) + "\n", encoding="utf-8")
     if summary["failed"]:
