@@ -1,4 +1,6 @@
 import json
+import os
+import subprocess
 import sys
 import time
 
@@ -13,6 +15,36 @@ from transform.align import (
 
 _ORIGINAL_CAPTION_EVENTS = render.caption_events
 LAST_ALIGNMENT_METADATA = {}
+
+
+def bounded_render_capture(cmd):
+    timeout = int(os.getenv("RENDER_SUBPROCESS_TIMEOUT_SECONDS", "900"))
+    if not 30 <= timeout <= 3600:
+        raise RuntimeError("Invalid render subprocess timeout")
+    started = time.monotonic()
+    try:
+        process = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"Render subprocess timed out after {timeout}s"
+        ) from exc
+    if process.stdout:
+        print(process.stdout, end="")
+    if process.stderr:
+        print(process.stderr, end="", file=sys.stderr)
+    if process.returncode != 0:
+        raise subprocess.CalledProcessError(
+            process.returncode,
+            cmd,
+            output=process.stdout,
+            stderr=process.stderr,
+        )
+    return round(time.monotonic() - started, 6), process.stderr or ""
 
 
 def aligned_caption_events(words, start_offset=0.0):
@@ -91,6 +123,7 @@ def caption_events_with_alignment(text, tts_segments, speech_duration, start_off
 
 def main():
     render.caption_events = caption_events_with_alignment
+    render.run_capture = bounded_render_capture
     render.main()
     metadata_path = render.OUTPUT_DIR / "render-metadata.json"
     metadata = render.load_json(metadata_path)
