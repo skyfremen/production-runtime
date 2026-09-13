@@ -87,31 +87,15 @@ def valid_request():
             "final_score": 87.5,
             "title_candidates": [
                 _title_candidate(selected_title, "HIDDEN_REVELATION", 91),
-                _title_candidate(
-                    "I Checked the Archive and Found the Proof #Shorts", "DISCOVERY", 86
-                ),
-                _title_candidate(
-                    "It Looked Like a Normal File Error… Until I Saw the Timestamp #Shorts",
-                    "NORMAL_TO_ABNORMAL",
-                    84,
-                ),
-                _title_candidate(
-                    "I Refused to Delete the Archive. Then My Boss Changed His Story #Shorts",
-                    "DECISION_CONSEQUENCE",
-                    83,
-                ),
-                _title_candidate(
-                    "Hours Before the Audit, I Found the Missing Backup #Shorts",
-                    "COUNTDOWN",
-                    82,
-                ),
+                _title_candidate("I Checked the Archive and Found the Proof #Shorts", "DISCOVERY", 86),
+                _title_candidate("It Looked Like a Normal File Error… Until I Saw the Timestamp #Shorts", "NORMAL_TO_ABNORMAL", 84),
+                _title_candidate("I Refused to Delete the Archive. Then My Boss Changed His Story #Shorts", "DECISION_CONSEQUENCE", 83),
+                _title_candidate("Hours Before the Audit, I Found the Missing Backup #Shorts", "COUNTDOWN", 82),
             ],
             "selected_title_score": 91.0,
             "hook_score": 90.0,
             "selection_class": "exploit",
-            "selection_reason": (
-                "Strong contradiction, proof-driven escalation and clear reversal."
-            ),
+            "selection_reason": "Strong contradiction, proof-driven escalation and clear reversal.",
             "similarity": {"max_recent_similarity": 0.21},
             "attributes": {
                 "subtype": "EVIDENCE_BACKFIRE",
@@ -128,17 +112,40 @@ def valid_request():
     }
 
 
+def valid_v7_request():
+    data = valid_request()
+    data["schema_version"] = 7
+    data["visual"] = {
+        "background_mode": "concatenated_fit_to_short",
+        "background_primary_sequence": [
+            {"background_id": "satisfying-001", "segment_start_seconds": 0, "segment_duration_seconds": 80},
+            {"background_id": "satisfying-002", "segment_start_seconds": 5, "segment_duration_seconds": 80},
+            {"background_id": "satisfying-003", "segment_start_seconds": 10, "segment_duration_seconds": 80},
+        ],
+        "background_backup_sequence": [
+            {"background_id": "satisfying-004", "segment_start_seconds": 0, "segment_duration_seconds": 80},
+            {"background_id": "satisfying-005", "segment_start_seconds": 5, "segment_duration_seconds": 80},
+            {"background_id": "satisfying-006", "segment_start_seconds": 10, "segment_duration_seconds": 80},
+        ],
+    }
+    return data
+
+
 class RequestSchemaTests(unittest.TestCase):
     def test_valid_request_passes(self):
         self.assertEqual(validate_request_data(valid_request()), [])
 
+    def test_valid_v7_sequence_request_passes_schema_validation(self):
+        self.assertEqual(validate_request_data(valid_v7_request()), [])
+
+    def test_v7_primary_backup_sequences_must_be_disjoint(self):
+        data = valid_v7_request()
+        data["visual"]["background_backup_sequence"][0]["background_id"] = "satisfying-001"
+        self.assertTrue(any("disjoint" in error for error in validate_request_data(data)))
+
     def test_immediate_publication_passes_with_null_publish_at(self):
         data = valid_request()
-        data["publication"] = {
-            "mode": "immediate",
-            "timezone": "Asia/Singapore",
-            "publish_at": None,
-        }
+        data["publication"] = {"mode": "immediate", "timezone": "Asia/Singapore", "publish_at": None}
         self.assertEqual(validate_request_data(data), [])
 
     def test_immediate_publication_rejects_non_null_publish_at(self):
@@ -149,7 +156,7 @@ class RequestSchemaTests(unittest.TestCase):
     def test_only_supported_schema_versions_are_accepted(self):
         data = valid_request()
         data["schema_version"] = 3
-        self.assertIn("schema_version must be 4, 5 or 6", validate_request_data(data))
+        self.assertIn("schema_version must be 4, 5, 6 or 7", validate_request_data(data))
 
     def test_publication_and_planning_are_required(self):
         for field in ("publication", "planning"):
@@ -162,9 +169,7 @@ class RequestSchemaTests(unittest.TestCase):
     def test_old_field_fails(self):
         data = valid_request()
         data["setup"] = "obsolete"
-        self.assertTrue(
-            any("unexpected" in error or "forbidden" in error for error in validate_request_data(data))
-        )
+        self.assertTrue(any("unexpected" in error or "forbidden" in error for error in validate_request_data(data)))
 
     def test_wrong_brand_fails(self):
         data = valid_request()
@@ -199,7 +204,6 @@ class RequestSchemaTests(unittest.TestCase):
         data = valid_request()
         data["story"].pop("punchline")
         self.assertTrue(any("punchline" in error for error in validate_request_data(data)))
-
         data = valid_request()
         data["story"]["punchline"]["text"] = "He deleted a totally different drive."
         self.assertTrue(any("must occur" in error for error in validate_request_data(data)))
