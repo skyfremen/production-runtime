@@ -69,6 +69,7 @@ def render_smoke_v6(request_path, root):
         "background_asset_id": request["visual"]["background_primary_id"],
         "background_treatment": request["visual"]["background_primary_treatment"],
         "background_treatment_pending": True,
+        "background_caption_readability_score": 90.0,
     })
     target.write_text(json.dumps(selection, indent=2) + "\n", encoding="utf-8")
     return result
