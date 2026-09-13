@@ -59,11 +59,20 @@ def continuous_render_capture(command):
     if selection.get("background_treatment_pending") is not True:
         raise RuntimeError("schema-v6 background treatment was not deferred correctly")
 
+    caption_score = selection.get("background_caption_readability_score")
+    if caption_score is None:
+        readability = selection.get("readability") or {}
+        caption_score = readability.get("registry_score")
+    if caption_score is None:
+        raise RuntimeError(
+            "schema-v6 deferred treatment is missing registered caption readability score"
+        )
+
     metrics = apply_fit_to_short_treatment(
         background_path,
         selection.get("background_treatment"),
         final_duration,
-        None,
+        caption_score,
         test_mode=os.getenv("STORY_TEST_MODE", "").strip().lower()
         in {"1", "true", "yes", "on"},
     )
