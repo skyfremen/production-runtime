@@ -8,6 +8,9 @@ from output.receipt_v6 import *
 
 _legacy_v6_build_receipt = legacy6.build_receipt
 _base_build_receipt = receipt_impl.build_receipt
+# Compatibility hook retained for existing v5 tests/callers that patch the
+# pre-v5 receipt builder through the current module facade.
+_legacy_build_receipt = legacy6._legacy_build_receipt
 
 
 def _sync_overrides():
@@ -18,6 +21,7 @@ def _sync_overrides():
         if name in globals():
             setattr(receipt_impl, name, globals()[name])
             setattr(legacy6, name, globals()[name])
+    legacy6._legacy_build_receipt = globals()["_legacy_build_receipt"]
 
 
 def _same_sequence(left, right):
