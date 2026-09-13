@@ -32,14 +32,14 @@ class CompatibilityContractTests(unittest.TestCase):
         self.assertEqual(compat.validate_contract_hash(current), current)
         self.assertIn(current, compat.supported_contract_hashes())
 
-    def test_pre_v5_fingerprint_remains_supported_for_staged_rollout(self):
+    def test_v4_and_v5_fingerprints_remain_supported_for_staged_rollout(self):
         current = compat.contract_hash()
-        self.assertEqual(len(compat.LEGACY_CONTRACT_HASHES), 1)
-        legacy = next(iter(compat.LEGACY_CONTRACT_HASHES))
-        self.assertRegex(legacy, r"^[0-9a-f]{64}$")
-        self.assertNotEqual(legacy, current)
-        self.assertEqual(compat.validate_contract_hash(legacy), legacy)
-        self.assertIn(legacy, compat.supported_contract_hashes())
+        self.assertEqual(len(compat.LEGACY_CONTRACT_HASHES), 2)
+        for legacy in compat.LEGACY_CONTRACT_HASHES:
+            self.assertRegex(legacy, r"^[0-9a-f]{64}$")
+            self.assertNotEqual(legacy, current)
+            self.assertEqual(compat.validate_contract_hash(legacy), legacy)
+            self.assertIn(legacy, compat.supported_contract_hashes())
 
     def test_fail_closed_for_missing_invalid_or_unknown_fingerprint(self):
         with self.assertRaises(ValueError):
@@ -66,10 +66,10 @@ class CompatibilityContractTests(unittest.TestCase):
         self.assertFalse(payload["behavior"]["renditions"]["hd_landscape"]["suitable"])
         self.assertTrue(payload["behavior"]["renditions"]["uhd_landscape"]["suitable"])
 
-    def test_semantic_and_background_treatment_schema_are_fingerprinted(self):
+    def test_semantic_and_continuous_background_schema_are_fingerprinted(self):
         schema = compat.contract_payload()["schema"]
-        self.assertEqual(schema["current_version"], 5)
-        self.assertEqual(schema["supported_versions"], [4, 5])
+        self.assertEqual(schema["current_version"], 6)
+        self.assertEqual(schema["supported_versions"], [4, 5, 6])
         self.assertEqual(schema["punchline_required_keys"], ["emphasis_text", "text"])
         self.assertEqual(schema["punchline_optional_keys"], ["type"])
         self.assertEqual(schema["punchline_max_emphasis_words"], 5)
@@ -79,10 +79,15 @@ class CompatibilityContractTests(unittest.TestCase):
         self.assertIn("background_backup_treatment", schema["visual_keys"])
         self.assertEqual(
             schema["treatment_keys"],
-            ["playback_rate", "segment_duration_seconds", "segment_start_seconds"],
+            ["mode", "segment_duration_seconds", "segment_start_seconds"],
         )
-        self.assertEqual(schema["playback_rate_min"], 1.0)
-        self.assertEqual(schema["playback_rate_max"], 2.0)
+        self.assertEqual(schema["background_modes"], ["fit_to_short"])
+        self.assertEqual(schema["fit_playback_rate_min"], 1.0)
+        self.assertEqual(schema["fit_playback_rate_max"], 2.5)
+        self.assertEqual(schema["min_continuous_source_seconds"], 180.0)
+        self.assertEqual(schema["preferred_continuous_range_seconds"], 300.0)
+        self.assertTrue(schema["runtime_derived_playback_rate"])
+        self.assertEqual(schema["normal_loop_count"], 0)
 
     def test_production_boundary_requires_fingerprint(self):
         workflow = (ROOT / ".github" / "workflows" / "run.yml").read_text(encoding="utf-8")
