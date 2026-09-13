@@ -25,10 +25,12 @@ jobs:
           PY
           tar --extract --gzip --file /tmp/source.tgz --strip-components 1 --directory "${GITHUB_WORKSPACE}"
 
-      - name: Install runtime dependencies
+      - name: Install FFmpeg and runtime dependencies
         shell: bash
         run: |
           set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
           python -m pip install --upgrade pip
           python -m pip install -r runtime/requirements.txt
 
