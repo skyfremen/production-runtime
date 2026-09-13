@@ -21,12 +21,81 @@ from guard.schema import (
 from resources import resolve_v6 as legacy6
 from resources.resolve_v6 import *
 
-# Preserve underscore-prefixed compatibility surface used by existing tests.
+_LEGACY_PREFLIGHT = legacy6.preflight
+_LEGACY_NORMALIZE_FOR_RENDER = legacy6.normalize_for_render
+_LEGACY_DOWNLOAD = legacy6.download
+_LEGACY_APPLY_BACKGROUND_TREATMENT = legacy6.apply_background_treatment
+_LEGACY_MEDIA_DURATION_SECONDS = legacy6._media_duration_seconds
+_LEGACY_RESOLVE = legacy6.resolve
 _fit_range = legacy6._fit_range
 apply_fit_to_short_treatment = legacy6.apply_fit_to_short_treatment
-_media_duration_seconds = legacy6._media_duration_seconds
 _strip_epsilon = 0.05
 _OUTPUT_TOLERANCE = 0.30
+
+
+def _sync_legacy_overrides():
+    """Preserve the current resolver's patchable surface across the v6 facade."""
+    for name in (
+        "OUTPUT_DIR",
+        "probe_video",
+        "normalization_required",
+        "analyze_caption_region",
+        "sha256_file",
+        "subprocess",
+        "_media_duration_seconds",
+    ):
+        if name in globals():
+            setattr(legacy6, name, globals()[name])
+    legacy6.preflight = globals()["preflight"]
+    legacy6.normalize_for_render = globals()["normalize_for_render"]
+    legacy6.download = globals()["download"]
+    legacy6.apply_background_treatment = globals()["apply_background_treatment"]
+
+
+def preflight(url):
+    _sync_legacy_overrides()
+    return _LEGACY_PREFLIGHT(url)
+
+
+def normalize_for_render(
+    target,
+    source_probe,
+    target_width=TARGET_WIDTH,
+    target_height=TARGET_HEIGHT,
+    target_fps=TARGET_FPS,
+):
+    _sync_legacy_overrides()
+    return _LEGACY_NORMALIZE_FOR_RENDER(
+        target, source_probe, target_width, target_height, target_fps
+    )
+
+
+def download(
+    asset,
+    rendition,
+    target,
+    target_width=TARGET_WIDTH,
+    target_height=TARGET_HEIGHT,
+    segment_duration_seconds=175,
+):
+    _sync_legacy_overrides()
+    return _LEGACY_DOWNLOAD(
+        asset,
+        rendition,
+        target,
+        target_width,
+        target_height,
+        segment_duration_seconds,
+    )
+
+
+def apply_background_treatment(target, treatment, caption_score=None):
+    _sync_legacy_overrides()
+    return _LEGACY_APPLY_BACKGROUND_TREATMENT(target, treatment, caption_score)
+
+
+def _media_duration_seconds(path):
+    return _LEGACY_MEDIA_DURATION_SECONDS(path)
 
 
 def _asset_map(registry):
@@ -203,7 +272,8 @@ def apply_concatenated_fit_to_short_treatment(
 def resolve(request_path, registry_path=None, do_download=True, do_preflight=True):
     request = load_json(request_path)
     if request.get("schema_version") != 7:
-        return legacy6.resolve(
+        _sync_legacy_overrides()
+        return _LEGACY_RESOLVE(
             request_path, registry_path, do_download=do_download, do_preflight=do_preflight
         )
 
