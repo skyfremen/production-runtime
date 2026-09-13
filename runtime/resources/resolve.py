@@ -180,7 +180,7 @@ def _assemble_sequence(resolved, sequence, target):
         "-filter_complex", ";".join(filters),
         "-map", "[outv]", "-an", "-sn", "-dn", "-map_metadata", "-1",
         "-c:v", "libx264", "-preset", NORMALIZED_PRESET, "-crf", str(NORMALIZED_CRF),
-        "-movflags", "+faststart", str(target),
+        "-movflags", "+faststart", "-f", "mp4", str(target),
     ])
     started = time.monotonic()
     process = subprocess.run(command, capture_output=True, text=True)
