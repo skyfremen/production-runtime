@@ -1,0 +1,41 @@
+name: Temporary V7 Validation
+
+on:
+  push:
+    branches:
+      - feat/background-sequence-v7-20260913
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Materialize exact source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          import urllib.request
+          url = f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/tarball/{os.environ['GITHUB_SHA']}"
+          urllib.request.urlretrieve(url, "/tmp/source.tgz")
+          PY
+          tar --extract --gzip --file /tmp/source.tgz --strip-components 1 --directory "${GITHUB_WORKSPACE}"
+
+      - name: Install runtime dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -r runtime/requirements.txt
+
+      - name: Run unit suite
+        shell: bash
+        env:
+          PYTHONPATH: runtime
+        run: |
+          set -euo pipefail
+          python -m unittest discover -s tests -p 'test_*.py'
