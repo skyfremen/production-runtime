@@ -7,6 +7,7 @@ from resources.resolve import (
     apply_concatenated_fit_to_short_treatment,
     apply_fit_to_short_treatment,
 )
+from resources.validate import load_registry
 from transform import process_base as base
 from transform.process_base import *
 
@@ -41,6 +42,33 @@ def _final_duration_from_command(command):
         raise RuntimeError("cannot derive final render duration from compositor command") from None
 
 
+def _sequence_caption_readability_score(selection, registry):
+    mapping = {
+        str(item.get("id")): item
+        for item in registry.get("assets", [])
+        if isinstance(item, dict)
+    }
+    sequence = selection.get("background_sequence")
+    if not isinstance(sequence, list) or not sequence:
+        raise RuntimeError("schema-v7 selected background sequence is missing")
+    scores = []
+    for segment in sequence:
+        if not isinstance(segment, dict):
+            raise RuntimeError("schema-v7 selected background sequence is invalid")
+        asset_id = str(segment.get("background_id") or "")
+        asset = mapping.get(asset_id)
+        if not isinstance(asset, dict):
+            raise RuntimeError(f"schema-v7 selected background asset is missing: {asset_id}")
+        try:
+            score = float(asset["caption_readability_score"])
+        except (KeyError, TypeError, ValueError):
+            raise RuntimeError(
+                f"schema-v7 selected background is missing caption readability: {asset_id}"
+            ) from None
+        scores.append(score)
+    return min(scores)
+
+
 def continuous_render_capture(command):
     if not _CURRENT_REQUEST_PATH or "-stream_loop" not in command:
         return _BASE_CAPTURE(command)
@@ -72,10 +100,11 @@ def continuous_render_capture(command):
             test_mode=test_mode,
         )
     else:
+        caption_score = _sequence_caption_readability_score(selection, load_registry())
         metrics = apply_concatenated_fit_to_short_treatment(
             background_path,
             final_duration,
-            None,
+            caption_score,
             test_mode=test_mode,
         )
 
