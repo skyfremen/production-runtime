@@ -23,24 +23,28 @@ concurrency:
 
 permissions:
   contents: read
-  packages: read
 
 jobs:
   evidence:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: exec
-    container:
-      image: ghcr.io/skyfremen/runtime-base@sha256:6ab68475deb3f0c3e531ff2913da283ceb7e682572acdbd1bff14709b07ffdca
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
     env:
       PYTHONPATH: runtime
       PRIVATE_STATE_TOKEN: ${{ secrets.PRIVATE_STATE_TOKEN }}
       PRIVATE_STATE_REPOSITORY: ${{ secrets.PRIVATE_STATE_REPOSITORY }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install FFmpeg for evidence extraction
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v ffmpeg >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y --no-install-recommends ffmpeg
+          fi
+          ffmpeg -version | head -n 1
 
       - name: Materialize exact-source review evidence
         shell: bash
