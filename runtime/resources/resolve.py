@@ -44,8 +44,6 @@ def _sync_legacy_overrides():
     ):
         if name in globals():
             setattr(legacy5, name, globals()[name])
-    # These wrappers are intentionally assigned so legacy5.resolve can pass
-    # caller/test patches through its own resolve_base synchronization layer.
     legacy5.preflight = globals()["preflight"]
     legacy5.normalize_for_render = globals()["normalize_for_render"]
     legacy5.download = globals()["download"]
@@ -93,17 +91,9 @@ def download(
     )
 
 
-def apply_background_treatment(
-    target,
-    treatment,
-    caption_score=None,
-):
+def apply_background_treatment(target, treatment, caption_score=None):
     _sync_legacy_overrides()
-    return _LEGACY_APPLY_BACKGROUND_TREATMENT(
-        target,
-        treatment,
-        caption_score,
-    )
+    return _LEGACY_APPLY_BACKGROUND_TREATMENT(target, treatment, caption_score)
 
 
 def _media_duration_seconds(path):
@@ -138,12 +128,8 @@ def _fit_range(treatment, required_output_duration, *, test_mode=False):
     output = float(required_output_duration)
     if output <= 0:
         raise RuntimeError("required background output duration must be positive")
-
-    # Dry-run uses a short synthetic local clip; bound only the test fixture range
-    # so the production contract remains unchanged.
     if test_mode and duration / output > FIT_PLAYBACK_RATE_MAX:
         duration = output * min(2.0, FIT_PLAYBACK_RATE_MAX)
-
     rate = duration / output
     if not FIT_PLAYBACK_RATE_MIN - 1e-9 <= rate <= FIT_PLAYBACK_RATE_MAX + 1e-9:
         raise RuntimeError(
@@ -169,9 +155,7 @@ def apply_fit_to_short_treatment(
 
     media_duration = _media_duration_seconds(target)
     start, duration, rate = _fit_range(
-        treatment,
-        required_output_duration,
-        test_mode=test_mode,
+        treatment, required_output_duration, test_mode=test_mode
     )
     if start < 0 or start + duration > media_duration + _DURATION_EPSILON:
         raise RuntimeError("fit-to-short range exceeds resolved media duration")
@@ -188,31 +172,11 @@ def apply_fit_to_short_treatment(
     try:
         process = subprocess.run(
             [
-                "ffmpeg",
-                "-y",
-                "-hide_banner",
-                "-v",
-                "error",
-                "-i",
-                str(target),
-                "-map",
-                "0:v:0",
-                "-vf",
-                ",".join(filters),
-                "-an",
-                "-sn",
-                "-dn",
-                "-map_metadata",
-                "-1",
-                "-c:v",
-                "libx264",
-                "-preset",
-                NORMALIZED_PRESET,
-                "-crf",
-                str(NORMALIZED_CRF),
-                "-movflags",
-                "+faststart",
-                str(treated),
+                "ffmpeg", "-y", "-hide_banner", "-v", "error",
+                "-i", str(target), "-map", "0:v:0", "-vf", ",".join(filters),
+                "-an", "-sn", "-dn", "-map_metadata", "-1",
+                "-c:v", "libx264", "-preset", NORMALIZED_PRESET,
+                "-crf", str(NORMALIZED_CRF), "-movflags", "+faststart", str(treated),
             ],
             capture_output=True,
             text=True,
@@ -251,9 +215,7 @@ def apply_fit_to_short_treatment(
     return {
         "background_treatment_mode": FIT_TO_SHORT_MODE,
         "background_treatment_applied": True,
-        "background_treatment_duration_seconds": round(
-            time.monotonic() - started, 6
-        ),
+        "background_treatment_duration_seconds": round(time.monotonic() - started, 6),
         "background_treatment_input_duration_seconds": round(media_duration, 6),
         "background_treatment_segment_start_seconds": round(start, 6),
         "background_treatment_segment_duration_seconds": round(duration, 6),
@@ -286,10 +248,32 @@ def resolve(request_path, registry_path=None, do_download=True, do_preflight=Tru
     if request.get("schema_version") != 6:
         return result
 
+    registry = load_registry(
+        registry_path or BASE / "media-library" / "backgrounds.json"
+    )
+    selected_asset = next(
+        (
+            item
+            for item in registry.get("assets", [])
+            if item.get("id") == result.get("background_asset_id")
+        ),
+        None,
+    )
+    if not isinstance(selected_asset, dict):
+        raise RuntimeError("resolved schema-v6 background disappeared from registry")
+    caption_score = selected_asset.get("caption_readability_score")
+    try:
+        caption_score_value = float(caption_score)
+    except (TypeError, ValueError):
+        raise RuntimeError(
+            "schema-v6 background requires registered caption readability score"
+        ) from None
+
     slot = result["background_selection"]
     treatment = treatment_for_slot(request, slot)
     result["background_treatment"] = treatment
     result["background_treatment_pending"] = True
+    result["background_caption_readability_score"] = caption_score_value
     if do_download:
         metrics = result.setdefault("metrics", {})
         metrics["background_treatment_mode"] = FIT_TO_SHORT_MODE
