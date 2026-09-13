@@ -29,8 +29,8 @@ class ReviewEvidenceTests(unittest.TestCase):
         self.assertIn('runtime/review_evidence.py', workflow)
         self.assertIn('background-review-evidence-${{ inputs.request_id }}', workflow)
         self.assertIn('contents: read', workflow)
-        self.assertIn('packages: read', workflow)
         self.assertNotIn('contents: write', workflow)
+        self.assertNotIn('packages: write', workflow)
         self.assertNotIn('videos().insert', workflow)
         self.assertNotIn('state_sink.py', workflow)
 
