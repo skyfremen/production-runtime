@@ -1,38 +1,58 @@
-"""Physical background resolver with immutable schema-v5 treatment execution.
+"""Schema-v6 continuous background resolver with v4/v5 compatibility.
 
-The retained resolve_base module owns the proven logical-ID/rendition/cache/
-normalization path. This layer only applies the request-authorized temporal
-segment and playback rate after the selected physical file is already normalized
-to production size. The normalized cache therefore remains reusable and never
-becomes persistent creative state.
+New schema-v6 requests defer temporal treatment until the renderer knows the exact
+post-TTS output duration. Historical v4/v5 requests continue through the retained
+v5 resolver. This facade preserves the established patchable module surface used
+by tests and callers while keeping the new continuous-fit path isolated.
 """
-
 import argparse
 import subprocess
 import time
 from pathlib import Path
 
-from guard.schema import treatment_for_slot
-from resources import resolve_base as resolve_impl
-from resources.resolve_base import *  # re-export the established resolver surface
+from base.contract import atomic_write_json, load_json
+from guard.schema import (
+    FIT_PLAYBACK_RATE_MAX,
+    FIT_PLAYBACK_RATE_MIN,
+    FIT_TO_SHORT_MODE,
+    treatment_for_slot,
+)
+from resources import resolve_v5 as legacy5
+from resources.resolve_v5 import *
 
-_original_preflight = resolve_impl.preflight
-_original_normalize_for_render = resolve_impl.normalize_for_render
-_original_download = resolve_impl.download
+# Capture the retained v5 callables before defining facade wrappers.
+_LEGACY_PREFLIGHT = legacy5.preflight
+_LEGACY_NORMALIZE_FOR_RENDER = legacy5.normalize_for_render
+_LEGACY_DOWNLOAD = legacy5.download
+_LEGACY_APPLY_BACKGROUND_TREATMENT = legacy5.apply_background_treatment
+_LEGACY_RESOLVE = legacy5.resolve
+
+_DURATION_EPSILON = 0.05
+_OUTPUT_TOLERANCE = 0.30
 
 
-def _sync_base_overrides():
-    """Preserve the established resolver's observable/patchable module surface."""
-    resolve_impl.OUTPUT_DIR = OUTPUT_DIR
-    resolve_impl.probe_video = globals()["probe_video"]
-    resolve_impl.normalize_for_render = globals()["normalize_for_render"]
-    resolve_impl.preflight = globals()["preflight"]
-    resolve_impl.download = globals()["download"]
+def _sync_legacy_overrides():
+    """Propagate facade monkey-patches/overrides into the retained v5 layer."""
+    for name in (
+        "OUTPUT_DIR",
+        "probe_video",
+        "normalization_required",
+        "analyze_caption_region",
+        "sha256_file",
+        "subprocess",
+        "_media_duration_seconds",
+    ):
+        if name in globals():
+            setattr(legacy5, name, globals()[name])
+    legacy5.preflight = globals()["preflight"]
+    legacy5.normalize_for_render = globals()["normalize_for_render"]
+    legacy5.download = globals()["download"]
+    legacy5.apply_background_treatment = globals()["apply_background_treatment"]
 
 
 def preflight(url):
-    _sync_base_overrides()
-    return _original_preflight(url)
+    _sync_legacy_overrides()
+    return _LEGACY_PREFLIGHT(url)
 
 
 def normalize_for_render(
@@ -42,8 +62,8 @@ def normalize_for_render(
     target_height=TARGET_HEIGHT,
     target_fps=TARGET_FPS,
 ):
-    _sync_base_overrides()
-    return _original_normalize_for_render(
+    _sync_legacy_overrides()
+    return _LEGACY_NORMALIZE_FOR_RENDER(
         target,
         source_probe,
         target_width,
@@ -60,8 +80,8 @@ def download(
     target_height=TARGET_HEIGHT,
     segment_duration_seconds=175,
 ):
-    _sync_base_overrides()
-    return _original_download(
+    _sync_legacy_overrides()
+    return _LEGACY_DOWNLOAD(
         asset,
         rendition,
         target,
@@ -71,129 +91,145 @@ def download(
     )
 
 
+def apply_background_treatment(target, treatment, caption_score=None):
+    _sync_legacy_overrides()
+    return _LEGACY_APPLY_BACKGROUND_TREATMENT(target, treatment, caption_score)
+
+
 def _media_duration_seconds(path):
     process = subprocess.run(
         [
-            "ffprobe", "-v", "error",
-            "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1",
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
             str(path),
         ],
         capture_output=True,
         text=True,
     )
     if process.returncode != 0:
-        raise RuntimeError("cannot determine normalized background duration")
+        raise RuntimeError("cannot determine background duration")
     try:
         value = float((process.stdout or "").strip())
     except (TypeError, ValueError):
-        raise RuntimeError("normalized background duration is invalid") from None
+        raise RuntimeError("background duration is invalid") from None
     if value <= 0:
-        raise RuntimeError("normalized background duration must be positive")
+        raise RuntimeError("background duration must be positive")
     return value
 
 
-def _validate_treatment_window(treatment, media_duration):
+def _fit_range(treatment, required_output_duration, *, test_mode=False):
     start = float(treatment["segment_start_seconds"])
-    duration = treatment["segment_duration_seconds"]
-    rate = float(treatment["playback_rate"])
-    if start < 0 or not 1.0 <= rate <= 2.0:
-        raise RuntimeError("background treatment violates execution bounds")
-    if duration is None:
-        if start != 0:
-            raise RuntimeError("full-source background treatment must start at zero")
-        return
-    duration = float(duration)
-    if duration < 1.0:
-        raise RuntimeError("background treatment segment is too short")
-    if start >= media_duration or start + duration > media_duration + 0.05:
+    duration = float(treatment["segment_duration_seconds"])
+    output = float(required_output_duration)
+    if output <= 0:
+        raise RuntimeError("required background output duration must be positive")
+    if test_mode and duration / output > FIT_PLAYBACK_RATE_MAX:
+        duration = output * min(2.0, FIT_PLAYBACK_RATE_MAX)
+    rate = duration / output
+    if not FIT_PLAYBACK_RATE_MIN - 1e-9 <= rate <= FIT_PLAYBACK_RATE_MAX + 1e-9:
         raise RuntimeError(
-            "background treatment segment exceeds the resolved media duration"
+            f"derived playback rate {rate:.6f}x violates "
+            f"{FIT_PLAYBACK_RATE_MIN:.2f}-{FIT_PLAYBACK_RATE_MAX:.2f}x bounds"
         )
+    return start, duration, rate
 
 
-def apply_background_treatment(target, treatment, caption_score=None):
-    """Apply trim/speed once to an already normalized 1080x1920/30 asset."""
+def apply_fit_to_short_treatment(
+    target,
+    treatment,
+    required_output_duration,
+    caption_score=None,
+    *,
+    test_mode=False,
+):
+    if treatment.get("mode") != FIT_TO_SHORT_MODE:
+        raise RuntimeError("schema-v6 background treatment must use fit_to_short")
     target = Path(target)
     if not target.exists():
-        raise RuntimeError("normalized background is missing before treatment")
+        raise RuntimeError("normalized background is missing before fit-to-short")
+
     media_duration = _media_duration_seconds(target)
-    _validate_treatment_window(treatment, media_duration)
+    start, duration, rate = _fit_range(
+        treatment, required_output_duration, test_mode=test_mode
+    )
+    if start < 0 or start + duration > media_duration + _DURATION_EPSILON:
+        raise RuntimeError("fit-to-short range exceeds resolved media duration")
 
-    start = float(treatment["segment_start_seconds"])
-    duration = treatment["segment_duration_seconds"]
-    rate = float(treatment["playback_rate"])
-    identity = duration is None and start == 0.0 and abs(rate - 1.0) <= 1e-9
-    if identity:
-        return {
-            "background_treatment_applied": False,
-            "background_treatment_duration_seconds": 0.0,
-            "background_treatment_input_duration_seconds": round(media_duration, 6),
-            "background_treatment_output_duration_seconds": round(media_duration, 6),
-            "treated_background_bytes": target.stat().st_size,
-            "treated_background_sha256": sha256_file(target),
-            "readability": analyze_caption_region(
-                target, media_duration, caption_score
-            ),
-        }
-
-    treated = target.parent / f"{target.name}.treated.mp4"
+    treated = target.parent / f"{target.name}.fit-to-short.mp4"
     treated.unlink(missing_ok=True)
-    filters = []
-    if duration is None:
-        filters.append("trim=start=0")
-        output_duration = media_duration / rate
-    else:
-        filters.append(
-            f"trim=start={start:.6f}:duration={float(duration):.6f}"
-        )
-        output_duration = float(duration) / rate
-    filters.extend([
-        f"setpts=(PTS-STARTPTS)/{rate:.8f}",
+    filters = [
+        f"trim=start={start:.6f}:duration={duration:.6f}",
+        f"setpts=(PTS-STARTPTS)/{rate:.10f}",
         f"fps={TARGET_FPS}",
         "format=yuv420p",
-    ])
+    ]
     started = time.monotonic()
     try:
         process = subprocess.run(
             [
                 "ffmpeg", "-y", "-hide_banner", "-v", "error",
-                "-i", str(target),
-                "-map", "0:v:0", "-vf", ",".join(filters),
+                "-i", str(target), "-map", "0:v:0", "-vf", ",".join(filters),
                 "-an", "-sn", "-dn", "-map_metadata", "-1",
                 "-c:v", "libx264", "-preset", NORMALIZED_PRESET,
-                "-crf", str(NORMALIZED_CRF), "-movflags", "+faststart",
-                str(treated),
+                "-crf", str(NORMALIZED_CRF), "-movflags", "+faststart", str(treated),
             ],
             capture_output=True,
             text=True,
         )
         if process.returncode != 0:
-            detail = (process.stderr or "unknown ffmpeg failure").strip()[-1000:]
-            raise RuntimeError(f"background treatment failed: {detail}")
+            raise RuntimeError(
+                "fit-to-short treatment failed: "
+                f"{(process.stderr or 'unknown failure').strip()[-1000:]}"
+            )
         if not treated.exists() or treated.stat().st_size < 10000:
-            raise RuntimeError("treated background is suspiciously small")
+            raise RuntimeError("fit-to-short background is suspiciously small")
         probe = probe_video(treated)
         if normalization_required(probe):
             raise RuntimeError(
-                f"treated background left production-normalized shape: {probe}"
+                f"fit-to-short output left production-normalized shape: {probe}"
             )
         actual_duration = _media_duration_seconds(treated)
-        if actual_duration <= 0 or actual_duration > output_duration + 0.25:
-            raise RuntimeError("treated background duration is inconsistent")
+        required = float(required_output_duration)
+        if actual_duration + _OUTPUT_TOLERANCE < required:
+            raise RuntimeError(
+                "fit-to-short output is shorter than required render timeline"
+            )
+        if actual_duration > required + _OUTPUT_TOLERANCE:
+            raise RuntimeError(
+                "fit-to-short output duration exceeds deterministic tolerance"
+            )
         treated.replace(target)
     finally:
         treated.unlink(missing_ok=True)
 
-    elapsed = round(time.monotonic() - started, 6)
     readability = analyze_caption_region(
-        target, min(actual_duration, output_duration), caption_score
+        target,
+        min(actual_duration, float(required_output_duration)),
+        caption_score,
     )
     return {
+        "background_treatment_mode": FIT_TO_SHORT_MODE,
         "background_treatment_applied": True,
-        "background_treatment_duration_seconds": elapsed,
+        "background_treatment_duration_seconds": round(time.monotonic() - started, 6),
         "background_treatment_input_duration_seconds": round(media_duration, 6),
+        "background_treatment_segment_start_seconds": round(start, 6),
+        "background_treatment_segment_duration_seconds": round(duration, 6),
+        "background_treatment_required_output_seconds": round(
+            float(required_output_duration), 6
+        ),
+        "background_treatment_derived_playback_rate": round(rate, 8),
         "background_treatment_output_duration_seconds": round(actual_duration, 6),
+        "background_treatment_loop_mode": "none",
+        "background_treatment_loop_count": 0,
+        "background_treatment_test_subrange": bool(
+            test_mode
+            and abs(duration - float(treatment["segment_duration_seconds"])) > 1e-6
+        ),
         "treated_background_bytes": target.stat().st_size,
         "treated_background_sha256": sha256_file(target),
         "readability": readability,
@@ -201,53 +237,53 @@ def apply_background_treatment(target, treatment, caption_score=None):
 
 
 def resolve(request_path, registry_path=None, do_download=True, do_preflight=True):
-    _sync_base_overrides()
-    result = resolve_impl.resolve(
+    _sync_legacy_overrides()
+    result = _LEGACY_RESOLVE(
         request_path,
         registry_path,
         do_download=do_download,
         do_preflight=do_preflight,
     )
     request = load_json(request_path)
-    if request.get("schema_version") != 5:
+    if request.get("schema_version") != 6:
         return result
+
+    registry = load_registry(
+        registry_path or BASE / "media-library" / "backgrounds.json"
+    )
+    selected_asset = next(
+        (
+            item
+            for item in registry.get("assets", [])
+            if item.get("id") == result.get("background_asset_id")
+        ),
+        None,
+    )
+    if not isinstance(selected_asset, dict):
+        raise RuntimeError("resolved schema-v6 background disappeared from registry")
+    caption_score = selected_asset.get("caption_readability_score")
+    try:
+        caption_score_value = float(caption_score)
+    except (TypeError, ValueError):
+        raise RuntimeError(
+            "schema-v6 background requires registered caption readability score"
+        ) from None
 
     slot = result["background_selection"]
     treatment = treatment_for_slot(request, slot)
     result["background_treatment"] = treatment
-    if not do_download:
-        atomic_write_json(OUTPUT_DIR / "background_selection.json", result)
-        return result
-
-    registry = load_registry(registry_path or BASE / "media-library" / "backgrounds.json")
-    asset = next(
-        (
-            item for item in registry.get("assets", [])
-            if item.get("id") == result["background_asset_id"]
-        ),
-        None,
-    )
-    if asset is None:
-        raise RuntimeError("resolved logical background disappeared from registry")
-
-    metrics = result.setdefault("metrics", {})
-    metrics.setdefault("normalized_background_bytes", metrics.get("render_background_bytes"))
-    metrics.setdefault("normalized_background_sha256", metrics.get("render_background_sha256"))
-    treatment_metrics = apply_background_treatment(
-        OUTPUT_DIR / "background.asset",
-        treatment,
-        asset.get("caption_readability_score"),
-    )
-    result["readability"] = treatment_metrics.pop("readability")
-    metrics.update(treatment_metrics)
-    metrics["render_background_bytes"] = metrics["treated_background_bytes"]
-    metrics["render_background_sha256"] = metrics["treated_background_sha256"]
+    result["background_treatment_pending"] = True
+    result["background_caption_readability_score"] = caption_score_value
+    if do_download:
+        metrics = result.setdefault("metrics", {})
+        metrics["background_treatment_mode"] = FIT_TO_SHORT_MODE
+        metrics["background_treatment_loop_mode"] = "none"
+        metrics["background_treatment_loop_count"] = 0
     atomic_write_json(OUTPUT_DIR / "background_selection.json", result)
     print(
-        "Applied immutable background treatment "
+        "Deferred fit-to-short treatment "
         f"slot={slot} start={treatment['segment_start_seconds']:.3f}s "
-        f"duration={treatment['segment_duration_seconds']} "
-        f"rate={treatment['playback_rate']:.3f}x"
+        f"duration={treatment['segment_duration_seconds']:.3f}s"
     )
     return result
 

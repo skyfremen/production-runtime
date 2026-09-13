@@ -1,4 +1,4 @@
-"""Execution-boundary fingerprint including schema-v5 treatment semantics."""
+"""Execution-boundary fingerprint including schema-v6 fit-to-short semantics."""
 
 import copy
 import hashlib
@@ -8,12 +8,22 @@ import re
 from base import compat_base as compat_impl
 from guard import schema
 from guard import schema_v4
+from guard import schema_v5
 
 CONTRACT_PROTOCOL_VERSION = compat_impl.CONTRACT_PROTOCOL_VERSION
 
 
+def _canonical_bytes(payload):
+    return json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    ).encode("utf-8")
+
+
 def _legacy_v4_contract_hash():
-    """Recreate the exact pre-v5 fingerprint for safe staged deployment."""
+    """Recreate the exact pre-v5 fingerprint for safe historical execution."""
     original_schema = compat_impl.schema
     try:
         compat_impl.schema = schema_v4
@@ -22,31 +32,55 @@ def _legacy_v4_contract_hash():
         compat_impl.schema = original_schema
 
 
-LEGACY_CONTRACT_HASHES = frozenset({
-    _legacy_v4_contract_hash(),
-    *compat_impl.LEGACY_CONTRACT_HASHES,
-})
+def _legacy_v5_contract_hash():
+    """Recreate the exact schema-v5 treatment fingerprint used before v6."""
+    original_schema = compat_impl.schema
+    try:
+        compat_impl.schema = schema_v5
+        payload = copy.deepcopy(compat_impl.contract_payload())
+        payload["schema"].update(
+            {
+                "treatment_keys": sorted(schema_v5.TREATMENT_KEYS),
+                "playback_rate_min": schema_v5.PLAYBACK_RATE_MIN,
+                "playback_rate_max": schema_v5.PLAYBACK_RATE_MAX,
+                "max_segment_start_seconds": schema_v5.MAX_SEGMENT_START_SECONDS,
+                "min_segment_duration_seconds": schema_v5.MIN_SEGMENT_DURATION_SECONDS,
+            }
+        )
+        return hashlib.sha256(_canonical_bytes(payload)).hexdigest()
+    finally:
+        compat_impl.schema = original_schema
+
+
+LEGACY_CONTRACT_HASHES = frozenset(
+    {
+        _legacy_v4_contract_hash(),
+        _legacy_v5_contract_hash(),
+        *compat_impl.LEGACY_CONTRACT_HASHES,
+    }
+)
 
 
 def contract_payload():
     payload = copy.deepcopy(compat_impl.contract_payload())
-    payload["schema"].update({
-        "treatment_keys": sorted(schema.TREATMENT_KEYS),
-        "playback_rate_min": schema.PLAYBACK_RATE_MIN,
-        "playback_rate_max": schema.PLAYBACK_RATE_MAX,
-        "max_segment_start_seconds": schema.MAX_SEGMENT_START_SECONDS,
-        "min_segment_duration_seconds": schema.MIN_SEGMENT_DURATION_SECONDS,
-    })
+    payload["schema"].update(
+        {
+            "treatment_keys": sorted(schema.TREATMENT_KEYS),
+            "background_modes": [schema.FIT_TO_SHORT_MODE],
+            "fit_playback_rate_min": schema.FIT_PLAYBACK_RATE_MIN,
+            "fit_playback_rate_max": schema.FIT_PLAYBACK_RATE_MAX,
+            "max_segment_start_seconds": schema.MAX_SEGMENT_START_SECONDS,
+            "min_continuous_source_seconds": schema.MIN_CONTINUOUS_SOURCE_SECONDS,
+            "preferred_continuous_range_seconds": schema.PREFERRED_CONTINUOUS_RANGE_SECONDS,
+            "runtime_derived_playback_rate": True,
+            "normal_loop_count": 0,
+        }
+    )
     return payload
 
 
 def canonical_contract_bytes():
-    return json.dumps(
-        contract_payload(),
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-    ).encode("utf-8")
+    return _canonical_bytes(contract_payload())
 
 
 def contract_hash():
