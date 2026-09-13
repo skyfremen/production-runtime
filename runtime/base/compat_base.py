@@ -57,30 +57,19 @@ def contract_payload():
     )
     renditions = {
         "exact_vertical": {
-            "id": "v1",
-            "file_type": "video/mp4",
-            "width": 1080,
-            "height": 1920,
-            "fps": 30,
-            "file_size_bytes": 1_000_000,
+            "id": "v1", "file_type": "video/mp4", "width": 1080,
+            "height": 1920, "fps": 30, "file_size_bytes": 1_000_000,
         },
         "hd_landscape": {
-            "id": "v2",
-            "file_type": "video/mp4",
-            "width": 1920,
-            "height": 1080,
-            "fps": 30,
-            "file_size_bytes": 1_000_000,
+            "id": "v2", "file_type": "video/mp4", "width": 1920,
+            "height": 1080, "fps": 30, "file_size_bytes": 1_000_000,
         },
         "uhd_landscape": {
-            "id": "v3",
-            "file_type": "video/mp4",
-            "width": 3840,
-            "height": 2160,
-            "fps": 30,
-            "file_size_bytes": 2_000_000,
+            "id": "v3", "file_type": "video/mp4", "width": 3840,
+            "height": 2160, "fps": 30, "file_size_bytes": 2_000_000,
         },
     }
+    visual_keys = getattr(schema, "VISUAL_KEYS", getattr(schema, "V7_VISUAL_KEYS", ()))
     return {
         "protocol": CONTRACT_PROTOCOL_VERSION,
         "base": {
@@ -125,7 +114,7 @@ def contract_payload():
             "punchline_types": _sorted(semantic.PUNCHLINE_TYPES),
             "punchline_max_emphasis_words": semantic.MAX_EMPHASIS_WORDS,
             "narration_keys": _sorted(schema.NARRATION_KEYS),
-            "visual_keys": _sorted(schema.VISUAL_KEYS),
+            "visual_keys": _sorted(visual_keys),
             "youtube_keys": _sorted(schema.YOUTUBE_KEYS),
             "publication_keys": _sorted(schema.PUBLICATION_KEYS),
             "planning_keys": _sorted(schema.PLANNING_KEYS),
@@ -158,10 +147,7 @@ def contract_payload():
 
 def canonical_contract_bytes():
     return json.dumps(
-        contract_payload(),
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
+        contract_payload(), sort_keys=True, separators=(",", ":"), ensure_ascii=True
     ).encode("utf-8")
 
 
