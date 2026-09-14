@@ -187,11 +187,16 @@ def apply_concatenated_fit_to_short_treatment(
     output = float(required_output_duration)
     if output <= 0:
         raise RuntimeError("required background output duration must be positive")
-    used_duration = source_duration
-    test_subrange = False
-    if test_mode and used_duration / output > FIT_MAX:
-        used_duration = output * min(2.0, FIT_MAX)
-        test_subrange = True
+
+    # The three frozen source segments can legitimately be longer than the final
+    # narrated Short. Never exceed the visual speed cap just to consume every
+    # source frame: deterministically trim the tail to the maximum duration that
+    # can be played within the allowed rate. Test mode keeps its existing 2x cap.
+    fit_limit = min(2.0, FIT_MAX) if test_mode else FIT_MAX
+    max_source_duration = output * fit_limit
+    used_duration = min(source_duration, max_source_duration)
+    source_trimmed = used_duration < source_duration - 1e-9
+    test_subrange = bool(test_mode and source_trimmed)
     rate = used_duration / output
     if not FIT_MIN - 1e-9 <= rate <= FIT_MAX + 1e-9:
         raise RuntimeError(
@@ -201,7 +206,7 @@ def apply_concatenated_fit_to_short_treatment(
     treated = target.parent / f"{target.name}.sequence-fit.mp4"
     treated.unlink(missing_ok=True)
     filters = []
-    if test_subrange:
+    if source_trimmed:
         filters.append(f"trim=start=0:duration={used_duration:.6f}")
     filters.extend(
         [
@@ -267,6 +272,10 @@ def apply_concatenated_fit_to_short_treatment(
         "background_treatment_input_duration_seconds": round(source_duration, 6),
         "background_treatment_source_duration_used_seconds": round(
             used_duration, 6
+        ),
+        "background_treatment_source_trimmed": source_trimmed,
+        "background_treatment_source_trimmed_seconds": round(
+            max(0.0, source_duration - used_duration), 6
         ),
         "background_treatment_required_output_seconds": round(output, 6),
         "background_treatment_derived_playback_rate": round(rate, 8),
