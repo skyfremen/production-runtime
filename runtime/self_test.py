@@ -173,6 +173,16 @@ def main():
     resolver_source = (ROOT / "runtime/resources/resolve.py").read_text(encoding="utf-8")
     ok(resolver_source.count("setsar=1") >= 3, "background normalization forces square pixels")
     ok("stream_loop" in (ROOT / "runtime/transform/process.py").read_text(encoding="utf-8") and "loop_count" in resolver_source, "no-loop treatment is explicit")
+    ok(
+        "max_source_duration = output * fit_limit" in resolver_source
+        and "used_duration = min(source_duration, max_source_duration)" in resolver_source
+        and "if source_trimmed:" in resolver_source,
+        "overlong backgrounds trim before bounded speed fit",
+    )
+    ok(
+        '"background_treatment_source_trimmed": source_trimmed' in resolver_source,
+        "background trimming is observable",
+    )
     print(f"SELF_TEST_PASS checks={checks}")
     print("contract_hash=" + contract_hash())
 
