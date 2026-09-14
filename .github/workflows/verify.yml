@@ -1,0 +1,23 @@
+name: Verify V1
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'runtime/**'
+      - '.github/workflows/single.yml'
+      - '.github/workflows/verify.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Compile and self-test without production access
+        run: |
+          python -m compileall -q runtime
+          PYTHONPATH=runtime python runtime/self_test.py

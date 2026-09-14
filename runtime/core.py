@@ -1,273 +1,34 @@
-"""Public-log-safe coordinator for one bounded production batch."""
-import argparse
-import contextlib
-import io
-import json
-import os
-import subprocess
-import sys
-import traceback
+"""Single-video Wacky Dramas V1 production coordinator."""
+import argparse, json, os, subprocess, sys
 from pathlib import Path
-
-from errors import E_EXEC, E_PREPARE, E_VERIFY
-
-from resources.validate import load_registry, validate_request_backgrounds
-from engine.batch import ordered_manifest_requests
 from engine.pipeline import ProductionPipeline
-from engine.shard import select_shard
-from output.progress import record_progress
+from guard.schema import validate_request_data
+from resources.validate import load_registry, validate_request_backgrounds
 
-PUBLIC_SUMMARY = Path("/tmp/runtime-public-summary.json")
-PENDING = Path("/tmp/batch-pending-verification.txt")
-INTERNAL_LOG = Path("/tmp/runtime-internal.log")
-DIAGNOSTIC = Path("/tmp/runtime-diagnostic.json")
-WORKER_ROOT = Path("/tmp/runtime-workers")
-PRIVATE_DETAIL_LIMIT = 32_000
-WORKER_LOG_LIMIT = 8_192
-FAILURE_CLASSIFICATION = Path("/tmp/runtime-failure-classification.json")
-
-
-class RunnerError(RuntimeError):
-    pass
-
-
-def silent_call(command, env=None):
-    timeout = int(os.getenv("RUNTIME_CHILD_TIMEOUT_SECONDS", "1200"))
-    if not 60 <= timeout <= 3600:
-        raise RunnerError("Invalid runtime child-process timeout")
-    with INTERNAL_LOG.open("a", encoding="utf-8") as log:
-        try:
-            result = subprocess.run(
-                command,
-                env=env,
-                stdout=log,
-                stderr=subprocess.STDOUT,
-                timeout=timeout,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise RunnerError(
-                f"Internal production command timed out after {timeout}s"
-            ) from exc
-    if result.returncode:
-        raise RunnerError("Internal production command failed")
-
-
-def request_env(base, source_map, request):
-    env = dict(base)
-    identity = source_map[str(request)]
-    env["SOURCE_COMMIT_SHA"] = identity["source_commit_sha"]
-    env["SOURCE_REQUEST_BLOB_SHA"] = identity["request_blob_sha"]
-    env["STORY_OUTPUT_DIR"] = f"runtime/output/{Path(request).stem}"
-    return env
-
-
-def prepare_manifest(manifest_path, *, ingest_sourcing, persist_registry):
-    manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
-    ordered = ordered_manifest_requests(manifest)
-    Path("/tmp/batch-requests.txt").write_text("\n".join(ordered) + "\n")
-    Path("/tmp/background-sourcing-manifests.txt").write_text(
-        "\n".join(manifest["sourcing"]) + ("\n" if manifest["sourcing"] else "")
-    )
-
-    if ingest_sourcing:
-        for sourcing in manifest["sourcing"]:
-            silent_call([
-                "python", "runtime/resources/registry.py", "ingest-manifest", "--manifest", sourcing,
-            ])
-        if manifest["sourcing"]:
-            silent_call(["python", "runtime/resources/validate.py"])
-        if persist_registry and manifest["sourcing"]:
-            silent_call([
-                "python", "runtime/transport.py", "persist-registry", "--manifest", manifest_path,
-            ])
-
-    registry = load_registry(manifest["registry"])
-    for request in ordered:
-        payload = json.loads(Path(request).read_text(encoding="utf-8"))
-        validate_request_backgrounds(payload, registry)
-    return manifest, ordered
-
-
-def prepare_shared(manifest_path):
-    manifest, ordered = prepare_manifest(
-        manifest_path, ingest_sourcing=True, persist_registry=True
-    )
-    output = os.environ.get("GITHUB_OUTPUT")
-    if output:
-        raw = Path(manifest["registry"]).read_bytes()
-        from transport import git_blob_sha
-        with open(output, "a", encoding="utf-8") as target:
-            target.write(f"registry_sha={git_blob_sha(raw)}\n")
-            target.write(f"registry_refresh={int(bool(manifest['sourcing']))}\n")
-    record_progress(manifest, "prepared")
-    print(f"Prepare PASS: items={len(ordered)}")
-
-
-def run(manifest_path, concurrency, *, profile=None, shard_index=None,
-        persist_registry=True):
-    manifest, ordered = prepare_manifest(
-        manifest_path,
-        ingest_sourcing=persist_registry,
-        persist_registry=persist_registry,
-    )
-    if (profile is None) != (shard_index is None):
-        raise RunnerError("Execution profile and shard index must be supplied together")
-    if profile is not None:
-        ordered = select_shard(ordered, shard_index, profile)
-    if profile == "single" and concurrency != 1:
-        raise RunnerError("Single execution requires concurrency 1")
-    if profile == "paired" and concurrency != 2:
-        raise RunnerError("Paired execution requires concurrency 2")
-    record_progress(manifest, "unit_started", shard_index)
-    print(f"Prepare PASS: items={len(ordered)}")
-
-    silent_call(["python", "runtime/output/access.py"])
-    print("Load PASS")
-
-    base_env = dict(os.environ)
-    base_env["REQUEST_SOURCE_MAP_JSON"] = json.dumps(manifest["request_sources"], separators=(",", ":"))
-    pipeline = ProductionPipeline(concurrency, base_env=base_env)
-    with INTERNAL_LOG.open("a", encoding="utf-8") as log, contextlib.redirect_stdout(log), contextlib.redirect_stderr(log):
-        production = pipeline.run(ordered)
-    record_progress(manifest, "unit_produced", shard_index)
-
-    failed_stages = {}
-    failures = Path("/tmp/batch-failures.txt")
-    if failures.exists():
-        for line in failures.read_text(encoding="utf-8").splitlines():
-            parts = line.split(" | ", 2)
-            if len(parts) >= 2:
-                failed_stages[parts[0]] = parts[1].split(" ", 1)[0]
-
-    success = 0
-    failed = int(production["failed"])
-    pending = []
-    if PENDING.exists():
-        pending = [line.split("\t", 1)[0] for line in PENDING.read_text().splitlines() if line]
-    for ordinal, request in enumerate(pending, 1):
-        env = request_env(base_env, manifest["request_sources"], request)
-        try:
-            silent_call(["python", "runtime/output/verify.py", "--request", request], env)
-            silent_call(["python", "runtime/output/receipt.py", "--request", request], env)
-            success += 1
-            print(f"item {ordinal:02d} Verify PASS")
-        except RunnerError:
-            failed += 1
-            print(f"item {ordinal:02d} Verify FAIL")
-
-    summary = {
-        "request_count": len(ordered),
-        "success": success,
-        "failed": failed,
-        "skipped": int(production["skipped"]),
-        "concurrency": int(production["concurrency"]),
-        "production_phase_seconds": float(production["production_phase_seconds"]),
-        "peak_cpu_percent": float(production["peak_cpu_percent"]),
-        "peak_memory_percent": float(production["peak_memory_percent"]),
-    }
-    if shard_index is not None:
-        summary["shard_index"] = shard_index
-    PUBLIC_SUMMARY.write_text(json.dumps(summary, sort_keys=True) + "\n")
-    for ordinal, request in enumerate(ordered, 1):
-        if request in failed_stages:
-            print(f"item {ordinal:02d} {failed_stages[request]} FAIL")
-    print(
-        "batch success={success} failed={failed} skipped={skipped}".format(**summary)
-    )
-    if failed:
-        raise RunnerError("One or more items failed; recovery remains authoritative")
-    record_progress(manifest, "unit_finished", shard_index)
-
-
+def run_cmd(cmd,env):
+    p=subprocess.run(cmd,env=env,text=True)
+    if p.returncode: raise RuntimeError(f"{Path(cmd[1]).name if len(cmd)>1 else cmd[0]} failed")
+def run(manifest_path):
+    manifest=json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+    requests=manifest.get("requests")
+    if manifest.get("manifest_version")!=1 or not isinstance(requests,list) or len(requests)!=1: raise RuntimeError("V1 manifest must contain exactly one request")
+    request=requests[0]; data=json.loads(Path(request).read_text(encoding="utf-8")); validate_request_data(data)
+    validate_request_backgrounds(data,load_registry(manifest["registry"]))
+    mapping=manifest.get("request_sources") or {}
+    if request not in mapping: raise RuntimeError("Exact request source mapping is missing")
+    env=dict(os.environ); env["REQUEST_SOURCE_MAP_JSON"]=json.dumps(mapping,separators=(",",":")); env["EXECUTION_ID"]=manifest["execution_id"]
+    run_cmd(["python","runtime/output/access.py"],env)
+    summary=ProductionPipeline(1,base_env=env).run([request])
+    if int(summary.get("failed",0)): raise RuntimeError("Production failed before remote verification")
+    identity=mapping[request]
+    verify_env=dict(env); verify_env["SOURCE_COMMIT_SHA"]=identity["source_commit_sha"]; verify_env["SOURCE_REQUEST_BLOB_SHA"]=identity["request_blob_sha"]
+    run_cmd(["python","runtime/output/verify.py","--request",request],verify_env)
+    run_cmd(["python","runtime/output/result.py","--request",request],verify_env)
+    Path("/tmp/runtime-public-summary.json").write_text(json.dumps({"success":1,"failed":0,"execution_id":manifest["execution_id"]},sort_keys=True)+"\n")
+    print("V1 production PASS")
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--manifest", default="/tmp/runtime-batch.json")
-    parser.add_argument("--concurrency", type=int, choices=(1, 2), default=2)
-    parser.add_argument("--profile", choices=("paired", "single"))
-    parser.add_argument("--shard-index", type=int)
-    parser.add_argument("--no-persist-registry", action="store_true")
-    parser.add_argument("--prepare-shared", action="store_true")
-    args = parser.parse_args()
-    if args.prepare_shared:
-        if args.profile is not None or args.shard_index is not None:
-            parser.error("shared preparation does not accept a shard")
-        prepare_shared(args.manifest)
-    else:
-        run(
-            args.manifest,
-            args.concurrency,
-            profile=args.profile,
-            shard_index=args.shard_index,
-            persist_registry=not args.no_persist_registry,
-        )
-
-
-def _worker_log_detail():
-    chunks = []
-    if not WORKER_ROOT.is_dir():
-        return ""
-    for path in sorted(WORKER_ROOT.glob("*/*.log")):
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace").strip()
-        except OSError:
-            continue
-        if not text:
-            continue
-        chunks.append(
-            f"[{path.parent.name}/{path.name}]\n{text[-WORKER_LOG_LIMIT:]}"
-        )
-    return "\n\n".join(chunks)[-PRIVATE_DETAIL_LIMIT:]
-
-
-def record_failure(exc, *, preparation=False):
-    private_sections = []
-    if INTERNAL_LOG.exists():
-        internal_detail = INTERNAL_LOG.read_text(
-            encoding="utf-8", errors="replace"
-        )[-PRIVATE_DETAIL_LIMIT:]
-        if internal_detail:
-            private_sections.append(internal_detail)
-    worker_detail = _worker_log_detail()
-    if worker_detail:
-        private_sections.append("Worker logs:\n" + worker_detail)
-    detail = traceback.format_exc()
-    if private_sections:
-        detail += "\nPrivate internal detail:\n" + "\n\n".join(private_sections)
-        detail = detail[-(PRIVATE_DETAIL_LIMIT * 2):]
-    classification = {}
-    if FAILURE_CLASSIFICATION.exists():
-        try:
-            classification = json.loads(
-                FAILURE_CLASSIFICATION.read_text(encoding="utf-8")
-            )
-        except (OSError, ValueError, json.JSONDecodeError):
-            classification = {}
-    code = classification.get("error_code")
-    allowed_codes = {E_EXEC, E_VERIFY} if not preparation else {E_PREPARE}
-    if code not in allowed_codes:
-        code = E_PREPARE if preparation else E_EXEC
-    stage = classification.get("stage")
-    allowed_stages = {"execute", "verify"} if not preparation else {"prepare"}
-    if stage not in allowed_stages:
-        stage = "prepare" if preparation else "execute"
-    retryable = classification.get("retryable")
-    if not isinstance(retryable, bool):
-        retryable = isinstance(exc, (OSError, RunnerError, subprocess.TimeoutExpired))
-    DIAGNOSTIC.write_text(json.dumps({
-        "schema_version": 1,
-        "stage": stage,
-        "error_code": code,
-        "retryable": retryable,
-        "execution_started": not preparation,
-        "verification_completed": False,
-        "detail": detail,
-    }, sort_keys=True) + "\n", encoding="utf-8")
-    return code
-
-
-if __name__ == "__main__":
-    preparation = "--prepare-shared" in sys.argv
-    try:
-        main()
-    except Exception as exc:
-        raise SystemExit(record_failure(exc, preparation=preparation)) from None
+    ap=argparse.ArgumentParser(); ap.add_argument("--manifest",default="/tmp/runtime-execution.json"); a=ap.parse_args()
+    try: run(a.manifest)
+    except Exception as e:
+        print(f"::error::E_EXEC_001 {e}",file=sys.stderr); raise SystemExit(1)
+if __name__=="__main__": main()
