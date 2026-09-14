@@ -125,8 +125,8 @@ def fetch_execution(execution_id, source_sha, contract_hash, dispatch_id, output
     registry_path = "data/backgrounds.json"
     registry_raw = state.read(registry_path, source_sha)
     registry = _json(registry_raw, registry_path)
-    if registry.get("schema_version") != 3 or not isinstance(registry.get("assets"), list):
-        raise TransportError("Background registry is not canonical schema_version 3")
+    if not isinstance(registry.get("assets"), list):
+        raise TransportError("Background registry must contain assets[]")
 
     local_request = Path(f"runtime/content/requests/{content_id}.json")
     local_registry = Path("runtime/data/backgrounds.json")
