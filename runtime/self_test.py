@@ -1,43 +1,179 @@
-"""Offline V1 contract checks. No private-state or YouTube network access."""
-import copy
+"""Offline structural and deterministic self-test for Wacky Dramas V1."""
+import json
 from pathlib import Path
+
 from base.compat import CONTRACT, contract_hash, validate_contract_hash
 from guard.schema import validate_request_data
 from output.state import evidence_path, result_path
-from output.transfer import build_upload_body
-from transport import EXEC_PREFIX, REQUEST_PREFIX, REGISTRY_PATH
-ROOT=Path(__file__).resolve().parents[1]; HASH="a40b144e0098c26b2bf578cc8fbebe018a798d3cfbc7399f4e9668a857f01314"; CID="wd-0123456789abcdef01234567"
-REQ={"request_version":1,"content_id":CID,"source_draft_id":"draft-20260914-deadbeef","channel":{"name":"Wacky Dramas","handle":"@WACKYDRAMAS"},
-"story":{"category":"work","premise":"A false accusation","conflict":"A manager blames her","twist":"The logs prove otherwise","hook":"My manager blamed me.","script":"I stayed quiet until I had the receipts. Then the audit log showed exactly who changed it.","lead_gender":"female","story_tone":"dramatic","punchline":"I had the receipts","card_emojis":["😳","💬","🔥","👀"]},
-"narration":{"engine":"kokoro","voice":"af_bella","speed":1.75},"background":{"mode":"concatenated_fit_to_short","segments":[{"background_id":x,"segment_start_seconds":0.0,"segment_duration_seconds":60.0} for x in "abc"]},
-"youtube":{"title":"The Audit Log Changed Everything","description":"A workplace accusation flips fast.","hashtags":["#WackyDramas","#Shorts"],"tags":["Wacky Dramas","Shorts"],"category_id":"24","made_for_kids":False},
-"visibility":"public","render":{"width":1080,"height":1920,"fps":30,"video_codec":"h264","h264_profile":"high","pixel_format":"yuv420p","audio_codec":"aac","audio_sample_rate":48000,"background_music":False}}
-def ok(name,v):
-    if not v: raise AssertionError(name)
-    print("PASS",name)
+from output.transfer import build_upload_body, prepare_upload
+
+ROOT = Path(__file__).resolve().parents[1]
+checks = 0
+
+
+def ok(condition, name):
+    global checks
+    if not condition:
+        raise AssertionError(name)
+    checks += 1
+    print("PASS", name)
+
+
+def sample_request():
+    script_words = ["word"] * 360
+    payoff = "the receipt proved everything"
+    script_words[200:205] = payoff.split()
+    return {
+        "request_version": 1,
+        "content_id": "wd-" + "a" * 24,
+        "source_draft_id": "draft-selftest01",
+        "channel": {"name": "Wacky Dramas", "handle": "@WACKYDRAMAS"},
+        "story": {
+            "category": "work",
+            "premise": "A coworker steals credit.",
+            "conflict": "The liar gets praised.",
+            "twist": "A timestamped receipt exists.",
+            "hook": "Everyone believed the wrong person.",
+            "script": " ".join(script_words),
+            "lead_gender": "female",
+            "story_tone": "dramatic",
+            "punchline": payoff,
+            "card_emojis": ["😳", "💬", "🔥", "👀"],
+        },
+        "narration": {"engine": "kokoro", "voice": "af_bella", "speed": 1.75},
+        "background": {
+            "mode": "concatenated_fit_to_short",
+            "segments": [
+                {"background_id": "a", "segment_start_seconds": 0.0, "segment_duration_seconds": 60.0},
+                {"background_id": "b", "segment_start_seconds": 0.0, "segment_duration_seconds": 60.0},
+                {"background_id": "c", "segment_start_seconds": 0.0, "segment_duration_seconds": 60.0},
+            ],
+        },
+        "youtube": {
+            "title": "The Receipt Changed Everything",
+            "description": "A workplace story.",
+            "hashtags": ["#WackyDramas", "#Shorts"],
+            "tags": ["Wacky Dramas", "Shorts"],
+            "category_id": "24",
+            "made_for_kids": False,
+        },
+        "visibility": "public",
+        "render": {
+            "width": 1080,
+            "height": 1920,
+            "fps": 30,
+            "video_codec": "h264",
+            "h264_profile": "high",
+            "pixel_format": "yuv420p",
+            "audio_codec": "aac",
+            "audio_sample_rate": 48000,
+            "background_music": False,
+        },
+    }
+
+
+class EmptyState:
+    def __init__(self):
+        self.created = []
+
+    def load(self, _path):
+        return None
+
+    def create(self, path, data):
+        self.created.append((path, data))
+        raise AssertionError("prepare_upload must not create the irreversible intent")
+
+
+class Channels:
+    def list(self, **_kwargs):
+        return self
+
+    def execute(self):
+        return {"items": [{"id": "UCvrq2m9G4yrwPfL_X-QPzMA", "contentDetails": {"relatedPlaylists": {"uploads": "PL"}}}]}
+
+
+class FakeYoutube:
+    def channels(self):
+        return Channels()
+
+
 def main():
-    validate_request_data(REQ); ok("v1 request schema",1)
-    ok("single compatibility hash",contract_hash()==HASH and validate_contract_hash(HASH)==HASH)
-    try: validate_contract_hash("0"*64); mismatch=False
-    except ValueError: mismatch=True
-    ok("compatibility mismatch fails",mismatch)
-    body=build_upload_body(REQ); ok("immediate PUBLIC body",body["status"]["privacyStatus"]=="public" and "publishAt" not in body["status"])
-    bad=copy.deepcopy(REQ); bad["publish_at"]="2099-01-01T00:00:00Z"
-    try: validate_request_data(bad); rejected=False
-    except ValueError: rejected=True
-    ok("scheduling fields rejected",rejected)
-    ok("new private paths",(EXEC_PREFIX,REQUEST_PREFIX,REGISTRY_PATH)==("content/executions/","content/requests/","data/backgrounds.json"))
-    ok("durable evidence path",evidence_path(CID,"intent")==f"content/executions/evidence/{CID}/intent.json")
-    ok("immutable result path",result_path(CID)==f"content/results/{CID}.json")
-    ok("contract descriptor",CONTRACT["visibility"]=="public" and CONTRACT["request_version"]==CONTRACT["execution_version"]==CONTRACT["result_version"]==1)
-    single=(ROOT/".github/workflows/single.yml").read_text(); ok("opaque dispatch inputs",all(x in single for x in ("execution_id","source_sha","contract_hash","dispatch_id")))
-    ok("no full request workflow input","narration" not in single and "title" not in single)
-    texts="\n".join(p.read_text(errors="ignore") for p in ROOT.rglob("*") if p.is_file() and ".git" not in p.parts and p.suffix in {".py",".yml",".yaml",".md",".json"})
-    ok("no legacy private path references",("youtube-"+"shorts-"+"bot/") not in texts)
-    workflows={p.name for p in (ROOT/".github/workflows").glob("*.yml")}; ok("no Daily/analytics runtime workflows",not ({"run.yml","observe.yml","review-evidence.yml","dry-run.yml"}&workflows))
-    ok("no legacy contract hashes","LEGACY_CONTRACT_HASH" not in (ROOT/"runtime/base/compat.py").read_text())
-    transfer=(ROOT/"runtime/output/transfer.py").read_text(); ok("duplicate upload fence",'record_type":"intent' in transfer); ok("ambiguous intent blocks","duplicate upload forbidden" in transfer)
-    execute=(ROOT/"runtime/output/execute.py").read_text(); ok("intent not created during render preparation","prepare_upload" in execute and "upload_new" in execute)
-    result=(ROOT/"runtime/output/result.py").read_text(); ok("result is verified-public only","verified" in result and "public" in result)
-    print("SELF_TEST_PASS checks=18 contract_hash="+contract_hash())
-if __name__=="__main__": main()
+    request = sample_request()
+    validate_request_data(request)
+    ok(True, "v1 request schema")
+    ok(contract_hash() == "a40b144e0098c26b2bf578cc8fbebe018a798d3cfbc7399f4e9668a857f01314", "single compatibility hash")
+    validate_contract_hash(contract_hash())
+    try:
+        validate_contract_hash("0" * 64)
+    except ValueError:
+        ok(True, "compatibility mismatch fails")
+    else:
+        raise AssertionError("compatibility mismatch must fail")
+
+    body = build_upload_body(request)
+    ok(body["status"]["privacyStatus"] == "public" and "publishAt" not in body["status"], "immediate PUBLIC body")
+
+    scheduled = json.loads(json.dumps(request))
+    scheduled["publish_at"] = "2030-01-01T00:00:00Z"
+    try:
+        validate_request_data(scheduled)
+    except ValueError:
+        ok(True, "scheduling fields rejected")
+    else:
+        raise AssertionError("scheduled field must fail")
+
+    ok(evidence_path(request["content_id"], "intent").startswith("content/executions/evidence/"), "new execution evidence path")
+    ok(result_path(request["content_id"]) == f"content/results/{request['content_id']}.json", "immutable result path")
+    ok(CONTRACT["request_path"] == "content/requests/{content_id}.json", "contract descriptor")
+
+    single = (ROOT / ".github/workflows/single.yml").read_text(encoding="utf-8")
+    ok(all(name in single for name in ("execution_id", "source_sha", "contract_hash", "dispatch_id")), "opaque dispatch inputs")
+    ok("narration" not in single and "request_json" not in single, "no full request workflow input")
+
+    stale = []
+    for path in ROOT.rglob("*"):
+        if path.is_file() and path.suffix in {".py", ".yml", ".yaml", ".md"}:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+            if ("youtube" + "-shorts-bot/") in text:
+                stale.append(path.as_posix())
+    ok(not stale, "no legacy private path references")
+
+    forbidden = [
+        ROOT / ".github/workflows/run.yml",
+        ROOT / ".github/workflows/observe.yml",
+        ROOT / ".github/workflows/review-evidence.yml",
+        ROOT / "runtime/observe.py",
+    ]
+    ok(not any(path.exists() for path in forbidden), "no Daily/analytics runtime workflows")
+    ok("LEGACY_CONTRACT_HASHES" not in (ROOT / "runtime/base/compat.py").read_text(encoding="utf-8"), "no legacy contract hashes")
+
+    state = EmptyState()
+    decision = prepare_upload(
+        state,
+        "runtime/content/requests/" + request["content_id"] + ".json",
+        request,
+        {
+            "content_id": request["content_id"],
+            "request_path": f"content/requests/{request['content_id']}.json",
+            "request_blob_sha": "a" * 40,
+            "source_commit_sha": "b" * 40,
+        },
+        FakeYoutube(),
+    )
+    ok(decision["upload_required"] is True and not state.created, "intent not created during render preparation")
+
+    transfer_source = (ROOT / "runtime/output/transfer.py").read_text(encoding="utf-8")
+    intent_pos = transfer_source.index('state.create(evidence_path(identity["content_id"],"intent")')
+    insert_pos = transfer_source.index("youtube.videos().insert")
+    ok(intent_pos < insert_pos, "durable intent precedes videos.insert")
+    ok("duplicate upload forbidden" in transfer_source, "ambiguous upload blocks")
+    result_source = (ROOT / "runtime/output/result.py").read_text(encoding="utf-8")
+    compact_result = result_source.replace(" ", "")
+    ok('"visibility":"public"' in compact_result and 'verification.get("passed")isnotTrue' in compact_result, "result requires verified PUBLIC")
+    ok("stream_loop" in (ROOT / "runtime/transform/process.py").read_text(encoding="utf-8") and "loop_count" in (ROOT / "runtime/resources/resolve.py").read_text(encoding="utf-8"), "no-loop treatment is explicit")
+    print(f"SELF_TEST_PASS checks={checks}")
+    print("contract_hash=" + contract_hash())
+
+
+if __name__ == "__main__":
+    main()

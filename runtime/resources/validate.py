@@ -2,7 +2,8 @@
 import json
 from pathlib import Path
 BASE=Path(__file__).resolve().parents[1]; REGISTRY_PATH=BASE/"data"/"backgrounds.json"; EPS=.05
-def load_registry(path=REGISTRY_PATH):
+def load_registry(path=None):
+    path = path or REGISTRY_PATH
     data=json.loads(Path(path).read_text(encoding="utf-8"))
     if not isinstance(data,dict) or data.get("schema_version")!=3 or not isinstance(data.get("assets"),list):
         raise ValueError("Background registry must be schema_version 3 with assets[]")

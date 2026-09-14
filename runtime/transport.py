@@ -1,50 +1,183 @@
-"""Fetch one exact V1 execution from private state."""
-import argparse, base64, json, re
+"""Exact immutable private-state transport for Wacky Dramas V1."""
+import argparse
+import base64
+import hashlib
+import json
+import os
+import re
 from pathlib import Path
+from urllib.error import HTTPError, URLError
 from urllib.parse import quote
-from output.state import GitHubState, RecoveryBlocked, blob_sha
+from urllib.request import Request, urlopen
 
-EID=re.compile(r"ex-[0-9a-f]{24}"); DID=re.compile(r"dp-[0-9a-f]{20}"); CID=re.compile(r"wd-[0-9a-f]{24}")
-SHA40=re.compile(r"[0-9a-f]{40}"); SHA64=re.compile(r"[0-9a-f]{64}")
-EXEC_PREFIX="content/executions/"; REQUEST_PREFIX="content/requests/"; REGISTRY_PATH="data/backgrounds.json"; REGISTRY=REGISTRY_PATH
+from base.compat import validate_contract_hash
+from base.contract import CONTENT_ID_RE, EXECUTION_ID_RE
 
-def exact(state,path,ref):
-    if not SHA40.fullmatch(ref): raise RecoveryBlocked("Exact 40-hex private source SHA required")
-    result=state.api(f"contents/{quote(path,safe='/')}?ref={ref}")
-    if result.get("type")!="file" or result.get("encoding")!="base64": raise RecoveryBlocked(f"Private state is not a file: {path}")
-    raw=base64.b64decode("".join(str(result.get("content","")).split()),validate=True)
-    if blob_sha(raw)!=result.get("sha"): raise RecoveryBlocked(f"Private blob integrity mismatch: {path}")
-    return raw,result["sha"]
+SHA40 = re.compile(r"^[0-9a-f]{40}$")
+DISPATCH_ID_RE = re.compile(r"^dp-[0-9a-f]{20}$")
+PRIVATE_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
-def fetch(execution_id,source_sha,contract_hash,dispatch_id,output):
-    if not EID.fullmatch(execution_id) or not SHA40.fullmatch(source_sha) or not SHA64.fullmatch(contract_hash) or not DID.fullmatch(dispatch_id):
-        raise RecoveryBlocked("Invalid opaque execution identity")
-    state=GitHubState(); raw,_=exact(state,f"content/executions/{execution_id}.json",source_sha)
-    execution=json.loads(raw)
-    expected={"execution_version":1,"execution_id":execution_id,"contract_hash":contract_hash,"dispatch_id":dispatch_id,"state":"prepared"}
-    if any(execution.get(k)!=v for k,v in expected.items()): raise RecoveryBlocked("Execution fence does not match opaque dispatch")
-    cid=str(execution.get("content_id") or ""); request_path=str(execution.get("request_path") or "")
-    request_source=str(execution.get("request_source_sha") or ""); request_blob=str(execution.get("request_blob_sha") or "")
-    if not CID.fullmatch(cid) or request_path!=f"content/requests/{cid}.json" or not SHA40.fullmatch(request_source) or not SHA40.fullmatch(request_blob):
-        raise RecoveryBlocked("Execution exact request identity is invalid")
-    request_raw,observed=exact(state,request_path,source_sha)
-    if observed!=request_blob: raise RecoveryBlocked("Request blob differs from immutable execution fence")
-    original_raw,original_blob=exact(state,request_path,request_source)
-    if original_blob!=request_blob or original_raw!=request_raw: raise RecoveryBlocked("Request creation revision differs from execution fence")
-    registry_raw,_=exact(state,REGISTRY,source_sha)
-    request_local=Path(f"runtime/content/requests/{cid}.json"); registry_local=Path("runtime/data/backgrounds.json")
-    request_local.parent.mkdir(parents=True,exist_ok=True); registry_local.parent.mkdir(parents=True,exist_ok=True)
-    request_local.write_bytes(request_raw); registry_local.write_bytes(registry_raw)
-    manifest={"manifest_version":1,"execution_id":execution_id,"dispatch_id":dispatch_id,"source_sha":source_sha,"contract_hash":contract_hash,
-              "requests":[request_local.as_posix()],"registry":registry_local.as_posix(),
-              "request_sources":{request_local.as_posix():{"source_commit_sha":request_source,"request_blob_sha":request_blob}}}
-    Path(output).write_text(json.dumps(manifest,indent=2,sort_keys=True)+"\n",encoding="utf-8")
-    print(f"Load PASS execution={execution_id} content={cid}")
+
+class TransportError(RuntimeError):
+    pass
+
+
+def git_blob_sha(raw):
+    return hashlib.sha1(f"blob {len(raw)}\0".encode() + raw).hexdigest()
+
+
+class PrivateState:
+    def __init__(self):
+        self.repo = str(os.environ.get("PRIVATE_STATE_REPOSITORY") or "")
+        self.token = str(os.environ.get("PRIVATE_STATE_TOKEN") or "")
+        if not PRIVATE_REPO_RE.fullmatch(self.repo) or not self.token:
+            raise TransportError("Invalid private-state configuration")
+
+    def read(self, path, ref):
+        if not SHA40.fullmatch(str(ref or "")):
+            raise TransportError("Exact 40-hex private source revision is required")
+        url = (
+            f"https://api.github.com/repos/{self.repo}/contents/"
+            f"{quote(path, safe='/')}?ref={ref}"
+        )
+        request = Request(
+            url,
+            headers={
+                "Authorization": f"Bearer {self.token}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+        )
+        try:
+            with urlopen(request, timeout=45) as response:
+                result = json.load(response)
+        except HTTPError as exc:
+            raise TransportError(
+                f"Private state missing/unreadable: {path} (HTTP {exc.code})"
+            ) from None
+        except (URLError, TimeoutError):
+            raise TransportError(f"Private state network failure: {path}") from None
+        if result.get("type") != "file" or result.get("encoding") != "base64":
+            raise TransportError(f"Private state is not a file: {path}")
+        try:
+            raw = base64.b64decode(
+                "".join(str(result.get("content") or "").split()), validate=True
+            )
+        except ValueError:
+            raise TransportError(f"Invalid base64 private state: {path}") from None
+        if result.get("sha") != git_blob_sha(raw):
+            raise TransportError(f"Private state blob integrity mismatch: {path}")
+        return raw
+
+
+def _json(raw, label):
+    try:
+        value = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise TransportError(f"Invalid JSON in {label}") from None
+    if not isinstance(value, dict):
+        raise TransportError(f"{label} must be a JSON object")
+    return value
+
+
+def fetch_execution(execution_id, source_sha, contract_hash, dispatch_id, output):
+    if not EXECUTION_ID_RE.fullmatch(execution_id):
+        raise TransportError("Invalid execution_id")
+    if not SHA40.fullmatch(source_sha):
+        raise TransportError("Invalid source_sha")
+    if not DISPATCH_ID_RE.fullmatch(dispatch_id):
+        raise TransportError("Invalid dispatch_id")
+    validate_contract_hash(contract_hash)
+
+    state = PrivateState()
+    execution_path = f"content/executions/{execution_id}.json"
+    execution_raw = state.read(execution_path, source_sha)
+    execution = _json(execution_raw, execution_path)
+
+    expected = {
+        "execution_version": 1,
+        "execution_id": execution_id,
+        "contract_hash": contract_hash,
+        "dispatch_id": dispatch_id,
+        "state": "prepared",
+    }
+    if any(execution.get(k) != v for k, v in expected.items()):
+        raise TransportError("Execution fence does not match opaque dispatch inputs")
+
+    content_id = str(execution.get("content_id") or "")
+    if not CONTENT_ID_RE.fullmatch(content_id):
+        raise TransportError("Execution fence has invalid content_id")
+    request_path = str(execution.get("request_path") or "")
+    if request_path != f"content/requests/{content_id}.json":
+        raise TransportError("Execution fence has invalid request_path")
+    request_source_sha = str(execution.get("request_source_sha") or "")
+    request_blob_sha = str(execution.get("request_blob_sha") or "")
+    if not SHA40.fullmatch(request_source_sha) or not SHA40.fullmatch(request_blob_sha):
+        raise TransportError("Execution fence lacks exact immutable request identity")
+
+    request_raw = state.read(request_path, request_source_sha)
+    if git_blob_sha(request_raw) != request_blob_sha:
+        raise TransportError("Immutable request blob differs from execution fence")
+    request = _json(request_raw, request_path)
+    if request.get("content_id") != content_id:
+        raise TransportError("Immutable request content_id differs from execution fence")
+
+    registry_path = "data/backgrounds.json"
+    registry_raw = state.read(registry_path, source_sha)
+    registry = _json(registry_raw, registry_path)
+    if registry.get("schema_version") != 3 or not isinstance(registry.get("assets"), list):
+        raise TransportError("Background registry is not canonical schema_version 3")
+
+    local_request = Path(f"runtime/content/requests/{content_id}.json")
+    local_registry = Path("runtime/data/backgrounds.json")
+    local_request.parent.mkdir(parents=True, exist_ok=True)
+    local_registry.parent.mkdir(parents=True, exist_ok=True)
+    local_request.write_bytes(request_raw)
+    local_registry.write_bytes(registry_raw)
+
+    manifest = {
+        "manifest_version": 1,
+        "execution_id": execution_id,
+        "content_id": content_id,
+        "requests": [local_request.as_posix()],
+        "registry": local_registry.as_posix(),
+        "request_sources": {
+            local_request.as_posix(): {
+                "source_commit_sha": request_source_sha,
+                "request_blob_sha": request_blob_sha,
+            }
+        },
+        "private_execution_source_sha": source_sha,
+        "contract_hash": contract_hash,
+        "dispatch_id": dispatch_id,
+    }
+    Path(output).write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    print(f"Fetch PASS execution={execution_id} content={content_id}")
+    return manifest
+
 
 def main():
-    ap=argparse.ArgumentParser(); p=ap.add_subparsers(dest="cmd",required=True).add_parser("fetch")
-    for n in ("execution-id","source-sha","contract-hash","dispatch-id"): p.add_argument("--"+n,required=True)
-    p.add_argument("--output",default="/tmp/runtime-execution.json"); a=ap.parse_args()
-    try: fetch(a.execution_id,a.source_sha,a.contract_hash,a.dispatch_id,a.output)
-    except (RecoveryBlocked,KeyError,ValueError,json.JSONDecodeError) as e: raise SystemExit(str(e)) from None
-if __name__=="__main__": main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("action", choices=("fetch",))
+    parser.add_argument("--execution-id", required=True)
+    parser.add_argument("--source-sha", required=True)
+    parser.add_argument("--contract-hash", required=True)
+    parser.add_argument("--dispatch-id", required=True)
+    parser.add_argument("--output", default="/tmp/runtime-execution.json")
+    args = parser.parse_args()
+    try:
+        fetch_execution(
+            args.execution_id,
+            args.source_sha,
+            args.contract_hash,
+            args.dispatch_id,
+            args.output,
+        )
+    except (TransportError, ValueError) as exc:
+        raise SystemExit(str(exc)) from None
+
+
+if __name__ == "__main__":
+    main()
