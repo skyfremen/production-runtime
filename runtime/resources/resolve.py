@@ -1,4 +1,4 @@
-"""V1 three-clip no-loop background resolver using the proven rendition engine."""
+"""V1 three-clip background resolver for compact trusted inventory."""
 import argparse
 import subprocess
 import time
@@ -11,12 +11,8 @@ from resources.media import (
     NORMALIZED_CRF,
     NORMALIZED_PRESET,
     TARGET_FPS,
-    TARGET_HEIGHT,
-    TARGET_WIDTH,
     analyze_caption_region,
-    generic_fallback,
     sha256_file,
-    suitable_renditions,
 )
 from resources.validate import asset_map, load_registry, validate_request_backgrounds
 
@@ -53,57 +49,74 @@ def _media_duration_seconds(path):
     return value
 
 
+def _media_sources(asset):
+    primary = str(asset.get("download_url") or "").strip()
+    sources = []
+    if primary:
+        sources.append(("registry_download_url", primary, False))
+    fallback = media.pexels_fallback_url(asset)
+    if fallback and fallback != primary:
+        sources.append(("pexels_original_fallback", fallback, True))
+    return sources
+
+
 def _resolve_one(asset, target, segment, *, do_download, do_preflight):
-    candidates = [(item, False) for item in suitable_renditions(asset)]
-    fallback = generic_fallback(asset)
-    if fallback:
-        candidates.append((fallback, True))
+    sources = _media_sources(asset)
+    if not sources:
+        raise RuntimeError(f"background {asset.get('id')} has no media source")
     failures = []
-    for rendition, generic in candidates:
+    for source_name, source_url, fallback_used in sources:
         if do_preflight:
-            ok, detail, preflight_seconds = media.preflight(rendition["direct_url"])
+            ok, detail, preflight_seconds = media.preflight(source_url)
             if not ok:
-                failures.append(f"rendition {rendition.get('id')}: {detail}")
+                failures.append(f"{source_name}: {detail}")
                 continue
         else:
-            detail, preflight_seconds = "registry-only; network preflight skipped", 0.0
+            detail, preflight_seconds = "network preflight skipped", 0.0
+
         metrics = {}
         if do_download:
             try:
                 metrics = media.download(
                     asset,
-                    rendition,
+                    source_url,
                     target,
-                    TARGET_WIDTH,
-                    TARGET_HEIGHT,
-                    float(segment["segment_duration_seconds"]),
+                    segment_duration_seconds=float(segment["segment_duration_seconds"]),
+                    media_source=source_name,
                 )
             except (subprocess.CalledProcessError, RuntimeError) as exc:
-                failures.append(f"rendition {rendition.get('id')}: {exc}")
+                failures.append(f"{source_name}: {exc}")
                 continue
+
             duration = _media_duration_seconds(target)
             start = float(segment["segment_start_seconds"])
             length = float(segment["segment_duration_seconds"])
             if start < 0 or start + length > duration + EPS:
-                failures.append(
-                    f"rendition {rendition.get('id')}: selected range exceeds media"
-                )
+                failures.append(f"{source_name}: selected range exceeds media")
                 Path(target).unlink(missing_ok=True)
                 continue
-        recorded = dict(rendition)
+
+        recorded = {
+            "id": source_name,
+            "direct_url": source_url,
+        }
         if metrics.get("source_probe"):
             recorded.update(metrics["source_probe"])
         return {
             "asset": asset,
             "rendition": recorded,
-            "generic_source_fallback_used": generic,
+            "media_source": source_name,
+            "source_url_used": source_url,
+            "generic_source_fallback_used": fallback_used,
+            "pexels_original_fallback_used": fallback_used,
             "preflight": detail,
             "preflight_duration_seconds": preflight_seconds,
             "download_metrics": metrics,
             "path": Path(target),
         }
+
     raise RuntimeError(
-        f"background {asset.get('id')} has no executable rendition: "
+        f"background {asset.get('id')} has no executable media source: "
         + "; ".join(failures)
     )
 
@@ -188,10 +201,6 @@ def apply_concatenated_fit_to_short_treatment(
     if output <= 0:
         raise RuntimeError("required background output duration must be positive")
 
-    # The three frozen source segments can legitimately be longer than the final
-    # narrated Short. Never exceed the visual speed cap just to consume every
-    # source frame: deterministically trim the tail to the maximum duration that
-    # can be played within the allowed rate. Test mode keeps its existing 2x cap.
     fit_limit = min(2.0, FIT_MAX) if test_mode else FIT_MAX
     max_source_duration = output * fit_limit
     used_duration = min(source_duration, max_source_duration)
@@ -260,9 +269,7 @@ def apply_concatenated_fit_to_short_treatment(
         treated.replace(target)
     finally:
         treated.unlink(missing_ok=True)
-    readability = analyze_caption_region(
-        target, min(actual, output), caption_score
-    )
+    readability = analyze_caption_region(target, min(actual, output), caption_score)
     return {
         "background_treatment_mode": MODE,
         "background_treatment_applied": True,
@@ -270,9 +277,7 @@ def apply_concatenated_fit_to_short_treatment(
             time.monotonic() - started, 6
         ),
         "background_treatment_input_duration_seconds": round(source_duration, 6),
-        "background_treatment_source_duration_used_seconds": round(
-            used_duration, 6
-        ),
+        "background_treatment_source_duration_used_seconds": round(used_duration, 6),
         "background_treatment_source_trimmed": source_trimmed,
         "background_treatment_source_trimmed_seconds": round(
             max(0.0, source_duration - used_duration), 6
@@ -321,9 +326,13 @@ def resolve(request_path, registry_path=None, do_download=True, do_preflight=Tru
             evidence.append(
                 {
                     **segment,
-                    "source": info["asset"].get("source"),
-                    "source_page": info["asset"].get("source_page"),
-                    "provider_asset_id": info["asset"].get("provider_asset_id"),
+                    "source_url": info["asset"].get("source_url"),
+                    "download_url": info["asset"].get("download_url"),
+                    "media_source": info["media_source"],
+                    "source_url_used": info["source_url_used"],
+                    "pexels_original_fallback_used": info[
+                        "pexels_original_fallback_used"
+                    ],
                     "rendition": info["rendition"],
                     "normalized_sha256": info["download_metrics"].get(
                         "render_background_sha256"
@@ -333,16 +342,18 @@ def resolve(request_path, registry_path=None, do_download=True, do_preflight=Tru
                     ),
                 }
             )
+        fallback_used = any(
+            item["pexels_original_fallback_used"] for item in resolved
+        )
         result = {
             "background_selection": "selected",
             "background_sequence": sequence,
             "background_sequence_evidence": evidence,
             "background_treatment": {"mode": MODE, "sequence": sequence},
             "background_treatment_pending": bool(do_download),
-            "logical_asset_ids": [x["background_id"] for x in sequence],
-            "rendition_fallback_used": any(
-                x["generic_source_fallback_used"] for x in resolved
-            ),
+            "logical_asset_ids": [item["background_id"] for item in sequence],
+            "rendition_fallback_used": fallback_used,
+            "pexels_original_fallback_used": fallback_used,
             "metrics": {
                 "resolution_started_at": started_at.isoformat(),
                 "background_resolution_duration_seconds": round(
