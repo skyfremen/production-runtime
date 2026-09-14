@@ -103,6 +103,26 @@ def main():
     validate_request_data(request)
     ok(True, "v1 request schema")
 
+    missing_punchline = json.loads(json.dumps(request))
+    missing_punchline["story"].pop("punchline")
+    validate_request_data(missing_punchline)
+    ok(True, "missing punchline is non-blocking")
+
+    null_punchline = json.loads(json.dumps(request))
+    null_punchline["story"]["punchline"] = None
+    validate_request_data(null_punchline)
+    ok(True, "null punchline is non-blocking")
+
+    empty_punchline = json.loads(json.dumps(request))
+    empty_punchline["story"]["punchline"] = ""
+    validate_request_data(empty_punchline)
+    ok(True, "empty punchline is non-blocking")
+
+    unmatched_punchline = json.loads(json.dumps(request))
+    unmatched_punchline["story"]["punchline"] = "this phrase is absent"
+    validate_request_data(unmatched_punchline)
+    ok(True, "unmatched punchline is non-blocking")
+
     semantic_words = [
         {"word": word, "start": index * 0.1, "end": (index + 1) * 0.1}
         for index, word in enumerate("before the receipt proved everything after".split())
@@ -114,13 +134,29 @@ def main():
         and semantic["emphasis_indices"] == frozenset(),
         "v1 string punchline resolves for orange highlighting",
     )
+    missing_semantic = resolve_semantic_span(semantic_words, None)
+    ok(
+        missing_semantic["status"] == "missing_metadata"
+        and not missing_semantic["punchline_indices"],
+        "missing punchline falls back to ordinary highlighting",
+    )
+    empty_semantic = resolve_semantic_span(semantic_words, "")
+    ok(
+        empty_semantic["status"] == "missing_metadata"
+        and not empty_semantic["punchline_indices"],
+        "empty punchline falls back to ordinary highlighting",
+    )
+    unmatched_semantic = resolve_semantic_span(semantic_words, "this phrase is absent")
+    ok(
+        unmatched_semantic["status"] == "punchline_not_found"
+        and not unmatched_semantic["punchline_indices"],
+        "unmatched punchline falls back to ordinary highlighting",
+    )
     legacy_semantic = resolve_semantic_span(
         semantic_words,
         {"text": "the receipt proved everything", "emphasis_text": "proved everything"},
     )
     ok(legacy_semantic["status"] == "missing_metadata", "legacy punchline object is unsupported")
-    missing_semantic = resolve_semantic_span(semantic_words, "this phrase is absent")
-    ok(missing_semantic["status"] == "punchline_not_found", "unmatched string punchline stays ordinary highlighting")
 
     ok(contract_hash() == "a40b144e0098c26b2bf578cc8fbebe018a798d3cfbc7399f4e9668a857f01314", "single compatibility hash")
     validate_contract_hash(contract_hash())
