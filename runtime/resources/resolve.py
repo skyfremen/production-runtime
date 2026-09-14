@@ -122,12 +122,12 @@ def _assemble_sequence(resolved, sequence, target):
         label = f"v{index}"
         filters.append(
             f"[{index}:v:0]trim=start={start:.6f}:duration={duration:.6f},"
-            f"setpts=PTS-STARTPTS,fps={TARGET_FPS},format=yuv420p[{label}]"
+            f"setpts=PTS-STARTPTS,fps={TARGET_FPS},setsar=1,format=yuv420p[{label}]"
         )
         labels.append(f"[{label}]")
     filters.append(
         "".join(labels)
-        + f"concat=n={len(sequence)}:v=1:a=0,fps={TARGET_FPS},format=yuv420p[outv]"
+        + f"concat=n={len(sequence)}:v=1:a=0,fps={TARGET_FPS},setsar=1,format=yuv420p[outv]"
     )
     command.extend(
         [
@@ -207,6 +207,7 @@ def apply_concatenated_fit_to_short_treatment(
         [
             f"setpts=(PTS-STARTPTS)/{rate:.10f}",
             f"fps={TARGET_FPS}",
+            "setsar=1",
             "format=yuv420p",
         ]
     )
