@@ -170,7 +170,9 @@ def main():
     result_source = (ROOT / "runtime/output/result.py").read_text(encoding="utf-8")
     compact_result = result_source.replace(" ", "")
     ok('"visibility":"public"' in compact_result and 'verification.get("passed")isnotTrue' in compact_result, "result requires verified PUBLIC")
-    ok("stream_loop" in (ROOT / "runtime/transform/process.py").read_text(encoding="utf-8") and "loop_count" in (ROOT / "runtime/resources/resolve.py").read_text(encoding="utf-8"), "no-loop treatment is explicit")
+    resolver_source = (ROOT / "runtime/resources/resolve.py").read_text(encoding="utf-8")
+    ok(resolver_source.count("setsar=1") >= 3, "background normalization forces square pixels")
+    ok("stream_loop" in (ROOT / "runtime/transform/process.py").read_text(encoding="utf-8") and "loop_count" in resolver_source, "no-loop treatment is explicit")
     print(f"SELF_TEST_PASS checks={checks}")
     print("contract_hash=" + contract_hash())
 
