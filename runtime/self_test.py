@@ -6,6 +6,7 @@ from base.compat import CONTRACT, contract_hash, validate_contract_hash
 from guard.schema import validate_request_data
 from output.state import evidence_path, result_path
 from output.transfer import build_upload_body, prepare_upload
+from transform.semantic import resolve_semantic_span
 
 ROOT = Path(__file__).resolve().parents[1]
 checks = 0
@@ -101,6 +102,26 @@ def main():
     request = sample_request()
     validate_request_data(request)
     ok(True, "v1 request schema")
+
+    semantic_words = [
+        {"word": word, "start": index * 0.1, "end": (index + 1) * 0.1}
+        for index, word in enumerate("before the receipt proved everything after".split())
+    ]
+    semantic = resolve_semantic_span(semantic_words, "the receipt proved everything")
+    ok(
+        semantic["status"] == "matched"
+        and semantic["punchline_indices"] == frozenset({1, 2, 3, 4})
+        and semantic["emphasis_indices"] == frozenset(),
+        "v1 string punchline resolves for orange highlighting",
+    )
+    legacy_semantic = resolve_semantic_span(
+        semantic_words,
+        {"text": "the receipt proved everything", "emphasis_text": "proved everything"},
+    )
+    ok(legacy_semantic["status"] == "missing_metadata", "legacy punchline object is unsupported")
+    missing_semantic = resolve_semantic_span(semantic_words, "this phrase is absent")
+    ok(missing_semantic["status"] == "punchline_not_found", "unmatched string punchline stays ordinary highlighting")
+
     ok(contract_hash() == "a40b144e0098c26b2bf578cc8fbebe018a798d3cfbc7399f4e9668a857f01314", "single compatibility hash")
     validate_contract_hash(contract_hash())
     try:
