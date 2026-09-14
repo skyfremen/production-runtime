@@ -21,10 +21,12 @@ def validate_request_data(x):
     if not re.fullmatch(r"wd-[0-9a-f]{24}",str(x["content_id"])): raise ValueError("invalid content_id")
     if not re.fullmatch(r"draft-[A-Za-z0-9-]{8,96}",str(x["source_draft_id"])): raise ValueError("invalid source_draft_id")
     if x["channel"]!={"name":"Wacky Dramas","handle":"@WACKYDRAMAS"}: raise ValueError("invalid channel")
-    s=x["story"]; sk={"category","premise","conflict","twist","hook","script","lead_gender","story_tone","punchline","card_emojis"}
-    if not isinstance(s,dict) or set(s)!=sk: raise ValueError("story must contain exactly the V1 fields")
-    for k in sk-{"card_emojis"}: nonempty(s[k],"story."+k)
-    if str(s["punchline"]).casefold() not in str(s["script"]).casefold(): raise ValueError("story.punchline must occur verbatim in story.script")
+    s=x["story"]
+    required_story={"category","premise","conflict","twist","hook","script","lead_gender","story_tone","card_emojis"}
+    allowed_story=required_story|{"punchline"}
+    if not isinstance(s,dict) or not required_story<=set(s) or set(s)-allowed_story:
+        raise ValueError("story must contain the required V1 fields; punchline is optional")
+    for k in required_story-{"card_emojis"}: nonempty(s[k],"story."+k)
     if not isinstance(s["card_emojis"],list) or not 4<=len(s["card_emojis"])<=6: raise ValueError("story.card_emojis must contain 4-6 entries")
     expected_voice=mapped_voice(str(s["lead_gender"]),str(s["story_tone"]))
     if x["narration"]!={"engine":"kokoro","voice":expected_voice,"speed":TTS_SPEED}: raise ValueError("invalid deterministic narration contract")
