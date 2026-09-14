@@ -15,8 +15,21 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Load exact source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          import urllib.request
+          url = f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/tarball/{os.environ['GITHUB_SHA']}"
+          urllib.request.urlretrieve(url, "/tmp/runtime-source.tgz")
+          PY
+          tar --extract --gzip --file /tmp/runtime-source.tgz \
+            --strip-components 1 --directory "${GITHUB_WORKSPACE}"
+
       - name: Compile and self-test without production access
         run: |
           python -m compileall -q runtime
