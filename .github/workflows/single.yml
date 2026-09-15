@@ -5,6 +5,8 @@ on:
     inputs:
       execution_id: {description: Immutable execution identifier, required: true, type: string}
       source_sha: {description: Exact private execution revision, required: true, type: string}
+      contract_hash: {description: Legacy compatibility input ignored during cutover, required: false, type: string}
+      dispatch_id: {description: Legacy dispatch input ignored during cutover, required: false, type: string}
 
 concurrency:
   group: production-${{ inputs.execution_id }}
