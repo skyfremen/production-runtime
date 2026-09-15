@@ -1,4 +1,4 @@
-"""V1 three-clip background resolver for compact trusted inventory."""
+"""V2 three-clip background resolver for compact trusted inventory."""
 import argparse
 import subprocess
 import time
@@ -296,8 +296,6 @@ def apply_concatenated_fit_to_short_treatment(
 
 def resolve(request_path, registry_path=None, do_download=True, do_preflight=True):
     request = load_json(request_path)
-    if request.get("request_version") != 1:
-        raise RuntimeError("Only Wacky Dramas V1 requests are supported")
     registry = load_registry(registry_path)
     sequence = validate_request_backgrounds(request, registry)
     mapping = asset_map(registry)
