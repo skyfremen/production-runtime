@@ -80,29 +80,29 @@ def _json(raw, label):
     return value
 
 
-def fetch_execution(execution_id, source_sha, contract_hash, dispatch_id, output):
+def fetch_execution(execution_id, source_sha, output):
     if not EXECUTION_ID_RE.fullmatch(execution_id):
         raise TransportError("Invalid execution_id")
     if not SHA40.fullmatch(source_sha):
         raise TransportError("Invalid source_sha")
-    if not DISPATCH_ID_RE.fullmatch(dispatch_id):
-        raise TransportError("Invalid dispatch_id")
-    validate_contract_hash(contract_hash)
 
     state = PrivateState()
     execution_path = f"content/executions/{execution_id}.json"
     execution_raw = state.read(execution_path, source_sha)
     execution = _json(execution_raw, execution_path)
 
-    expected = {
-        "execution_version": 1,
-        "execution_id": execution_id,
-        "contract_hash": contract_hash,
-        "dispatch_id": dispatch_id,
-        "state": "prepared",
-    }
-    if any(execution.get(k) != v for k, v in expected.items()):
-        raise TransportError("Execution fence does not match opaque dispatch inputs")
+    if execution.get("execution_version") != 1:
+        raise TransportError("Execution fence has unsupported execution_version")
+    if execution.get("execution_id") != execution_id or execution.get("state") != "prepared":
+        raise TransportError("Execution fence does not match immutable dispatch identity")
+
+    try:
+        contract_hash = validate_contract_hash(execution.get("contract_hash"))
+    except ValueError as exc:
+        raise TransportError(str(exc)) from None
+    dispatch_id = str(execution.get("dispatch_id") or "")
+    if not DISPATCH_ID_RE.fullmatch(dispatch_id):
+        raise TransportError("Execution fence has invalid dispatch_id")
 
     content_id = str(execution.get("content_id") or "")
     if not CONTENT_ID_RE.fullmatch(content_id):
@@ -163,16 +163,12 @@ def main():
     parser.add_argument("action", choices=("fetch",))
     parser.add_argument("--execution-id", required=True)
     parser.add_argument("--source-sha", required=True)
-    parser.add_argument("--contract-hash", required=True)
-    parser.add_argument("--dispatch-id", required=True)
     parser.add_argument("--output", default="/tmp/runtime-execution.json")
     args = parser.parse_args()
     try:
         fetch_execution(
             args.execution_id,
             args.source_sha,
-            args.contract_hash,
-            args.dispatch_id,
             args.output,
         )
     except (TransportError, ValueError) as exc:
