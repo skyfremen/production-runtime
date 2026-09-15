@@ -1,4 +1,4 @@
-name: Verify V1
+name: Verify V2
 
 on:
   push:
