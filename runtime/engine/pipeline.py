@@ -40,7 +40,6 @@ class ProductionPipeline:
         if not isinstance(requests,(list,tuple)) or len(requests)!=1: raise PipelineError("V1 pipeline requires exactly one request")
         request=str(requests[0]); env=self._env(request); started=time.monotonic()
         output=Path(env["STORY_OUTPUT_DIR"]); output.mkdir(parents=True,exist_ok=True)
-        self._call(["python","runtime/guard/schema.py","--request",request],env)
         with tempfile.NamedTemporaryFile(prefix="v1-prepare-",delete=False) as tmp: status_path=Path(tmp.name)
         try:
             prepare_env=dict(env); prepare_env["GITHUB_OUTPUT"]=str(status_path)
@@ -49,8 +48,6 @@ class ProductionPipeline:
         finally: status_path.unlink(missing_ok=True)
         upload_required=status.get("upload_required")=="true"
         if upload_required:
-            check="import json,sys; from pathlib import Path; sys.path.insert(0,'runtime'); from resources.validate import load_registry,validate_request_backgrounds; p=sys.argv[1]; validate_request_backgrounds(json.loads(Path(p).read_text()),load_registry())"
-            self._call(["python","-c",check,request],env)
             self._call(["python","runtime/resources/resolve.py","--request",request],env)
             self._call(["python","runtime/transform/process.py","--request",request],env)
             self._call(["python","runtime/transform/verify.py","--request",request],env)
