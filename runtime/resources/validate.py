@@ -1,4 +1,4 @@
-"""V1 compact trusted background registry and request validation."""
+"""V2 compact trusted background registry and request validation."""
 import json
 import math
 from pathlib import Path
@@ -43,8 +43,8 @@ def asset_map(data):
 
 
 def validate_request_backgrounds(request, registry):
-    if request.get("request_version") != 1:
-        raise ValueError("Only request_version 1 is supported")
+    if request.get("request_version") != 2:
+        raise ValueError("Only request_version 2 is supported")
     background = request.get("background") or {}
     segments = background.get("segments")
     if (
@@ -52,7 +52,7 @@ def validate_request_backgrounds(request, registry):
         or not isinstance(segments, list)
         or len(segments) != 3
     ):
-        raise ValueError("Invalid V1 background sequence")
+        raise ValueError("Invalid V2 background sequence")
 
     mapping = asset_map(registry)
     ids = []
@@ -74,7 +74,7 @@ def validate_request_backgrounds(request, registry):
             raise ValueError(f"Background {background_id} selected range is invalid")
 
     if len(set(ids)) != 3:
-        raise ValueError("V1 background IDs must be distinct")
+        raise ValueError("V2 background IDs must be distinct")
     return segments
 
 
