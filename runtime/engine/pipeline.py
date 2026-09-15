@@ -1,4 +1,4 @@
-"""Small sequential V1 production pipeline for exactly one immutable request."""
+"""Small sequential V2 production pipeline for exactly one immutable request."""
 import json, os, subprocess, tempfile, time
 from pathlib import Path
 
@@ -13,7 +13,7 @@ def _read_outputs(path):
 
 class ProductionPipeline:
     def __init__(self,concurrency=1,*,base_env=None):
-        if int(concurrency)!=1: raise PipelineError("V1 production supports exactly one request at a time")
+        if int(concurrency)!=1: raise PipelineError("V2 production supports exactly one request at a time")
         self.base_env=dict(base_env or os.environ)
 
     def _env(self,request):
@@ -37,10 +37,10 @@ class ProductionPipeline:
         if result.returncode: raise PipelineError(f"{Path(command[1]).name if len(command)>1 else command[0]} exited {result.returncode}")
 
     def run(self,requests):
-        if not isinstance(requests,(list,tuple)) or len(requests)!=1: raise PipelineError("V1 pipeline requires exactly one request")
+        if not isinstance(requests,(list,tuple)) or len(requests)!=1: raise PipelineError("V2 pipeline requires exactly one request")
         request=str(requests[0]); env=self._env(request); started=time.monotonic()
         output=Path(env["STORY_OUTPUT_DIR"]); output.mkdir(parents=True,exist_ok=True)
-        with tempfile.NamedTemporaryFile(prefix="v1-prepare-",delete=False) as tmp: status_path=Path(tmp.name)
+        with tempfile.NamedTemporaryFile(prefix="v2-prepare-",delete=False) as tmp: status_path=Path(tmp.name)
         try:
             prepare_env=dict(env); prepare_env["GITHUB_OUTPUT"]=str(status_path)
             self._call(["python","runtime/output/execute.py","--stage","prepare","--request",request],prepare_env)
