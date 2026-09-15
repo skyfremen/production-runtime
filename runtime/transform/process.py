@@ -1,4 +1,4 @@
-"""V1 caption/render entry point with deferred no-loop background treatment."""
+"""V2 caption/render entry point with deferred no-loop background treatment."""
 import os
 import sys
 
@@ -17,7 +17,7 @@ def _strip_background_stream_loop(command):
         if command[index] == "-stream_loop" and command[index + 1] == "-1":
             return command[:index] + command[index + 2 :]
     raise RuntimeError(
-        "no-loop V1 compositor command is missing expected background loop marker"
+        "no-loop V2 compositor command is missing expected background loop marker"
     )
 
 
@@ -29,17 +29,17 @@ def _final_duration_from_command(command):
         raise RuntimeError("cannot derive final render duration") from None
 
 
-def v1_render_capture(command):
+def v2_render_capture(command):
     if not _CURRENT_REQUEST_PATH or "-stream_loop" not in command:
         return _BASE_CAPTURE(command)
     request = load_json(_CURRENT_REQUEST_PATH)
-    if request.get("request_version") != 1:
-        raise RuntimeError("Only Wacky Dramas request_version 1 is supported")
+    if request.get("request_version") != 2:
+        raise RuntimeError("Only Wacky Dramas request_version 2 is supported")
     selection_path = base.render.OUTPUT_DIR / "background_selection.json"
     background_path = base.render.OUTPUT_DIR / "background.asset"
     selection = load_json(selection_path)
     if selection.get("background_treatment_pending") is not True:
-        raise RuntimeError("V1 background treatment was not deferred correctly")
+        raise RuntimeError("V2 background treatment was not deferred correctly")
     final_duration = _final_duration_from_command(command)
     test_mode = os.getenv("STORY_TEST_MODE", "").strip().lower() in {
         "1",
@@ -69,7 +69,7 @@ def main():
         _CURRENT_REQUEST_PATH = sys.argv[position + 1]
     except (ValueError, IndexError):
         _CURRENT_REQUEST_PATH = None
-    base.bounded_render_capture = v1_render_capture
+    base.bounded_render_capture = v2_render_capture
     base.main()
 
 
