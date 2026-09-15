@@ -10,6 +10,10 @@ from transform.process_base import *  # preserve proven alignment/caption surfac
 _BASE_CAPTURE = base.bounded_render_capture
 _CURRENT_REQUEST_PATH = None
 
+# Keep the full-hook/no-truncation contract, but allow the existing pixel-fit
+# loop to step down further before declaring the opening card impossible.
+base.render.HOOK_MIN_FONT_SIZE = 36
+
 
 def _strip_background_stream_loop(command):
     command = list(command)
