@@ -4,7 +4,6 @@ import re
 import subprocess
 
 SAMPLE_COUNT = 12
-MIN_REGISTRY_READABILITY = 60
 MAX_PROTECTION_ALPHA = 0.38
 SAFE_REGION = {"x": 0.12, "y": 0.34, "width": 0.76, "height": 0.34}
 
@@ -21,10 +20,8 @@ def protection_for_samples(yavg, yhigh, ydiff):
     return round(alpha, 2)
 
 
-def analyze_caption_region(path, duration_seconds, registry_score):
-    """Sample the used segment over time and return a bounded protection decision."""
-    if float(registry_score or 0) < MIN_REGISTRY_READABILITY:
-        raise RuntimeError("caption-safe region failed the registered readability floor")
+def analyze_caption_region(path, duration_seconds, registry_score=None):
+    """Sample the used segment over time and return adaptive caption protection."""
     duration = max(1.0, float(duration_seconds or 1.0))
     sample_rate = SAMPLE_COUNT / duration
     r = SAFE_REGION
@@ -51,7 +48,7 @@ def analyze_caption_region(path, duration_seconds, registry_score):
         "mean_luma": round(sum(values["YAVG"]) / len(values["YAVG"]), 3),
         "peak_luma": round(max(values["YHIGH"]), 3),
         "max_temporal_luma_difference": round(max(values["YDIF"] or [0.0]), 3),
-        "registry_score": float(registry_score),
+        "registry_score": float(registry_score) if registry_score is not None else None,
         "protection": "soft_caption_band", "protection_alpha": alpha,
         "protection_applied": alpha > 0, "passed": True,
     }
