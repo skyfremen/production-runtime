@@ -184,8 +184,21 @@ def main():
     ok(CONTRACT["request_path"] == "content/requests/{content_id}.json", "contract descriptor")
 
     single = (ROOT / ".github/workflows/single.yml").read_text(encoding="utf-8")
-    ok(all(name in single for name in ("execution_id", "source_sha", "contract_hash", "dispatch_id")), "opaque dispatch inputs")
+    ok(
+        all(name in single for name in ("execution_id", "source_sha"))
+        and "contract_hash:" not in single
+        and "dispatch_id:" not in single,
+        "two-field opaque dispatch inputs",
+    )
     ok("narration" not in single and "request_json" not in single, "no full request workflow input")
+
+    pipeline_source = (ROOT / "runtime/engine/pipeline.py").read_text(encoding="utf-8")
+    ok(
+        "runtime/guard/schema.py" not in pipeline_source
+        and "validate_request_backgrounds" not in pipeline_source,
+        "single production preflight",
+    )
+    ok(not (ROOT / "runtime/guard/semantic.py").exists(), "legacy semantic guard removed")
 
     stale = []
     for path in ROOT.rglob("*"):
