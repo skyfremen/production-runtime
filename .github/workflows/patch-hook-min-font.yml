@@ -1,0 +1,37 @@
+name: Patch hook minimum font
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/patch-hook-min-font.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lower hook minimum font size
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("runtime/transform/compose.py")
+          text = path.read_text(encoding="utf-8")
+          old = "HOOK_MIN_FONT_SIZE = 41"
+          new = "HOOK_MIN_FONT_SIZE = 36"
+          if old not in text:
+              raise SystemExit(f"Expected source line not found: {old}")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
+          rm .github/workflows/patch-hook-min-font.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add runtime/transform/compose.py .github/workflows/patch-hook-min-font.yml
+          git commit -m "Lower hook minimum font size to 36px"
+          git push
