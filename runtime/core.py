@@ -2,6 +2,7 @@
 import argparse, json, os, subprocess, sys
 from pathlib import Path
 from engine.pipeline import ProductionPipeline
+from guard.preflight import run_preflight
 from guard.schema import validate_request_data
 from resources.validate import load_registry, validate_request_backgrounds
 
@@ -17,7 +18,7 @@ def run(manifest_path):
     mapping=manifest.get("request_sources") or {}
     if request not in mapping: raise RuntimeError("Exact request source mapping is missing")
     env=dict(os.environ); env["REQUEST_SOURCE_MAP_JSON"]=json.dumps(mapping,separators=(",",":")); env["EXECUTION_ID"]=manifest["execution_id"]
-    run_cmd(["python","runtime/output/access.py"],env)
+    run_preflight()
     summary=ProductionPipeline(1,base_env=env).run([request])
     if int(summary.get("failed",0)): raise RuntimeError("Production failed before remote verification")
     identity=mapping[request]
