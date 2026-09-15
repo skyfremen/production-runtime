@@ -1,4 +1,4 @@
-"""Single-video Wacky Dramas V1 production coordinator."""
+"""Single-video Wacky Dramas V2 production coordinator."""
 import argparse, json, os, subprocess, sys
 from pathlib import Path
 from engine.pipeline import ProductionPipeline
@@ -12,7 +12,7 @@ def run_cmd(cmd,env):
 def run(manifest_path):
     manifest=json.loads(Path(manifest_path).read_text(encoding="utf-8"))
     requests=manifest.get("requests")
-    if manifest.get("manifest_version")!=1 or not isinstance(requests,list) or len(requests)!=1: raise RuntimeError("V1 manifest must contain exactly one request")
+    if manifest.get("manifest_version")!=1 or not isinstance(requests,list) or len(requests)!=1: raise RuntimeError("Execution manifest v1 must contain exactly one request")
     request=requests[0]; data=json.loads(Path(request).read_text(encoding="utf-8")); validate_request_data(data)
     validate_request_backgrounds(data,load_registry(manifest["registry"]))
     mapping=manifest.get("request_sources") or {}
@@ -26,7 +26,7 @@ def run(manifest_path):
     run_cmd(["python","runtime/output/verify.py","--request",request],verify_env)
     run_cmd(["python","runtime/output/result.py","--request",request],verify_env)
     Path("/tmp/runtime-public-summary.json").write_text(json.dumps({"success":1,"failed":0,"execution_id":manifest["execution_id"]},sort_keys=True)+"\n")
-    print("V1 production PASS")
+    print("V2 production PASS")
 def main():
     ap=argparse.ArgumentParser(); ap.add_argument("--manifest",default="/tmp/runtime-execution.json"); a=ap.parse_args()
     try: run(a.manifest)
