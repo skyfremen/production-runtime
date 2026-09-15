@@ -52,5 +52,5 @@ jobs:
           --source-sha "${{ inputs.source_sha }}"
           --output /tmp/runtime-execution.json
 
-      - name: Produce and verify PUBLIC video
+      - name: Produce and verify scheduled video
         run: python runtime/core.py --manifest /tmp/runtime-execution.json
