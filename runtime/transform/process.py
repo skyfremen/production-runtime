@@ -14,6 +14,13 @@ _CURRENT_REQUEST_PATH = None
 # loop to step down further before declaring the opening card impossible.
 base.render.HOOK_MIN_FONT_SIZE = 36
 
+# Normal captions still start at 78 px and naturally stop shrinking once they fit.
+# Permit an emergency per-event shrink for unusually long individual words so a
+# valid story cannot fail production solely because one token exceeds the safe
+# 824 px caption width at the former 59 px floor. The safe margins/line limit are
+# unchanged; only the font size may step down further when required.
+base.render.CAPTION_MIN_FONT_SIZE = 42
+
 
 def _strip_background_stream_loop(command):
     command = list(command)
