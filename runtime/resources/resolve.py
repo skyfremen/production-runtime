@@ -19,8 +19,10 @@ from resources.validate import asset_map, load_registry, validate_request_backgr
 FIT_MIN = 1.0
 FIT_MAX = 2.5
 MODE = "concatenated_fit_to_short"
-EPS = 0.05
 TOLERANCE = 0.30
+# Normalization can shift container duration by a few frames. Keep the
+# per-segment range guard consistent with the sequence/output tolerance.
+EPS = TOLERANCE
 
 
 def _media_duration_seconds(path):
