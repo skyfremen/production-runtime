@@ -286,7 +286,9 @@ def download(
 
         source_bytes = target.stat().st_size
         source_sha = sha256_file(target)
-        readability = analyze_caption_region(target, segment_duration_seconds, None)
+        # Registry membership already represents editorial/readability approval.
+        # Runtime sampling is retained only to choose adaptive caption protection.
+        readability = analyze_caption_region(target, segment_duration_seconds)
         geometry = crop_fill_geometry(
             probe["width"], probe["height"], target_width, target_height
         )
