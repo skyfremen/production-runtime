@@ -7,7 +7,9 @@ TARGET_HEIGHT = 1920
 TARGET_FPS = 30
 SUPPORTED_TYPES = {"video/mp4"}
 
-# UHD is allowed only when a strong landscape crop requires it.
+# Kept only for backward compatibility with callers/metadata that may still
+# reference the old limit. Source pixel count is no longer a production
+# suitability blocker; post-crop geometry is the authoritative quality check.
 MAX_SOURCE_PIXELS = 3840 * 2160
 MAX_CROP_FILL_UPSCALE = 1.05
 
@@ -45,11 +47,18 @@ def rendition_is_production_suitable(
     max_source_pixels=MAX_SOURCE_PIXELS,
     max_upscale=MAX_CROP_FILL_UPSCALE,
 ):
+    """Return whether the actual post-crop image can meet the output floor.
+
+    ``max_source_pixels`` is retained as a deprecated compatibility argument
+    but is intentionally not enforced. A large source is safe when its 9:16
+    crop can be downscaled (or only minimally upscaled) to the target.
+    """
+    del max_source_pixels
     if rendition.get("file_type") not in SUPPORTED_TYPES:
         return False
     try:
         width, height = int(rendition["width"]), int(rendition["height"])
-        if width <= 0 or height <= 0 or width * height > int(max_source_pixels):
+        if width <= 0 or height <= 0:
             return False
         geometry = crop_fill_geometry(width, height, target_width, target_height)
     except (KeyError, TypeError, ValueError):
@@ -105,7 +114,9 @@ def production_rendition_policy():
         "target_height": TARGET_HEIGHT,
         "target_fps": TARGET_FPS,
         "max_source_pixels": MAX_SOURCE_PIXELS,
+        "max_source_pixels_enforced": False,
         "max_crop_fill_upscale": MAX_CROP_FILL_UPSCALE,
         "selection": "native_vertical_then_smallest_sufficient_post_crop_rendition",
+        "source_suitability": "post_crop_geometry_only",
         "uhd_downloads_allowed_when_required_after_crop": True,
     }
