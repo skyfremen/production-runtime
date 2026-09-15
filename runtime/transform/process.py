@@ -4,7 +4,6 @@ import sys
 
 from base.contract import atomic_write_json, load_json
 from resources.resolve import apply_concatenated_fit_to_short_treatment
-from resources.validate import asset_map, load_registry
 from transform import process_base as base
 from transform.process_base import *  # preserve proven alignment/caption surface
 
@@ -30,24 +29,6 @@ def _final_duration_from_command(command):
         raise RuntimeError("cannot derive final render duration") from None
 
 
-def _caption_readability_score(request):
-    registry = load_registry()
-    mapping = asset_map(registry)
-    scores = []
-    for segment in request["background"]["segments"]:
-        asset_id = segment["background_id"]
-        asset = mapping.get(asset_id)
-        if not isinstance(asset, dict):
-            raise RuntimeError(f"selected background is missing: {asset_id}")
-        try:
-            scores.append(float(asset["caption_readability_score"]))
-        except (KeyError, TypeError, ValueError):
-            raise RuntimeError(
-                f"selected background lacks caption readability score: {asset_id}"
-            ) from None
-    return min(scores)
-
-
 def v1_render_capture(command):
     if not _CURRENT_REQUEST_PATH or "-stream_loop" not in command:
         return _BASE_CAPTURE(command)
@@ -66,10 +47,12 @@ def v1_render_capture(command):
         "yes",
         "on",
     }
+    # Registry membership already represents editorial/readability approval.
+    # The retained 12-frame FFmpeg analysis is the sole source for adaptive
+    # caption protection (0.18 / 0.30 / 0.38); no stored registry score gates render.
     metrics = apply_concatenated_fit_to_short_treatment(
         background_path,
         final_duration,
-        _caption_readability_score(request),
         test_mode=test_mode,
     )
     selection["background_treatment_pending"] = False
