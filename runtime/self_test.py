@@ -185,9 +185,10 @@ def main():
 
     single = (ROOT / ".github/workflows/single.yml").read_text(encoding="utf-8")
     ok(
-        all(name in single for name in ("execution_id", "source_sha", "contract_hash", "dispatch_id"))
-        and single.count("required: false") >= 2,
-        "cutover accepts legacy dispatch inputs without requiring them",
+        all(name in single for name in ("execution_id", "source_sha"))
+        and "contract_hash:" not in single
+        and "dispatch_id:" not in single,
+        "two-field opaque dispatch inputs",
     )
     ok("narration" not in single and "request_json" not in single, "no full request workflow input")
 
