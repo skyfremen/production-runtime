@@ -1,6 +1,7 @@
 """Offline tests for compact trusted background inventory and acquisition fallback."""
 
 from resources.media import pexels_fallback_url
+from resources.policy import crop_fill_geometry, rendition_is_production_suitable
 from resources.resolve import _media_sources
 from resources.validate import validate_registry, validate_request_backgrounds
 
@@ -50,6 +51,27 @@ def main():
             True,
         ),
     ]
+
+    # Suitability is determined by the actual 9:16 crop, not total source pixels.
+    # A 4096x2160 landscape source yields a ~1215x2160 crop and safely downscales
+    # to 1080x1920, even though its total pixel count exceeds 3840x2160.
+    geometry_4096 = crop_fill_geometry(4096, 2160)
+    assert round(geometry_4096["effective_crop_width"], 3) == 1215.0
+    assert round(geometry_4096["effective_crop_height"], 3) == 2160.0
+    assert geometry_4096["scale_factor"] < 1.0
+    assert rendition_is_production_suitable(
+        {"file_type": "video/mp4", "width": 4096, "height": 2160},
+        max_source_pixels=3840 * 2160,
+    )
+    assert rendition_is_production_suitable(
+        {"file_type": "video/mp4", "width": 3840, "height": 2160}
+    )
+    assert rendition_is_production_suitable(
+        {"file_type": "video/mp4", "width": 1080, "height": 1920}
+    )
+    assert not rendition_is_production_suitable(
+        {"file_type": "video/mp4", "width": 1920, "height": 1080}
+    )
 
     request = {
         "request_version": 1,
