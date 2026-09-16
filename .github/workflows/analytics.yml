@@ -12,6 +12,7 @@ permissions:
 jobs:
   collect:
     runs-on: ubuntu-latest
+    environment: exec
     env:
       PRIVATE_STATE_REPOSITORY: ${{ secrets.PRIVATE_STATE_REPOSITORY }}
       PRIVATE_STATE_TOKEN: ${{ secrets.PRIVATE_STATE_TOKEN }}
@@ -19,7 +20,16 @@ jobs:
       RUNTIME_AUTH_B: ${{ secrets.RUNTIME_AUTH_B }}
       RUNTIME_AUTH_C: ${{ secrets.RUNTIME_AUTH_C }}
     steps:
-      - name: Checkout runtime
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Load exact runtime source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os, urllib.request
+          url=f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/tarball/{os.environ['GITHUB_SHA']}"
+          urllib.request.urlretrieve(url,"/tmp/runtime-source.tgz")
+          PY
+          tar --extract --gzip --file /tmp/runtime-source.tgz --strip-components 1 --directory "${GITHUB_WORKSPACE}"
+
       - name: Collect analytics
         run: python runtime/analytics_remote.py
