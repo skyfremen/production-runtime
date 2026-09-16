@@ -346,6 +346,60 @@ def compact_example(row: dict) -> dict:
     }
 
 
+def compact_group_for_planner(group: dict) -> dict:
+    out = {}
+    for name, metrics in sorted((group or {}).items()):
+        if not isinstance(metrics, dict):
+            continue
+        item = {"sample_size": int(metrics.get("sample_size", 0) or 0)}
+        sample_24h = int(metrics.get("sample_24h", 0) or 0)
+        if sample_24h > 0 and metrics.get("median_views_24h") is not None:
+            item["views_24h"] = {"sample": sample_24h, "median": metrics["median_views_24h"]}
+        sample_72h = int(metrics.get("sample_72h", 0) or 0)
+        if sample_72h > 0 and metrics.get("median_views_72h") is not None:
+            item["views_72h"] = {"sample": sample_72h, "median": metrics["median_views_72h"]}
+        mature = int(metrics.get("mature_sample", 0) or 0)
+        if mature > 0:
+            mature_data = {"sample": mature}
+            for source, target in (
+                ("median_average_view_percentage", "average_view_percentage"),
+                ("median_subscribers_gained", "subscribers_gained"),
+                ("median_shares", "shares"),
+            ):
+                if metrics.get(source) is not None:
+                    mature_data[target] = metrics[source]
+            item["mature"] = mature_data
+        out[name] = item
+    return out
+
+
+def compact_example_for_planner(example: dict) -> dict:
+    keys = (
+        "content_id", "title", "premise", "category", "story_tone",
+        "duration_seconds", "views_24h", "views_72h", "average_view_percentage",
+    )
+    return {k: example[k] for k in keys if k in example and example[k] not in (None, "")}
+
+
+def planner_projection(summary: dict) -> dict:
+    projection = {
+        "analytics_version": summary.get("analytics_version", 1),
+        "generated_at": summary.get("generated_at"),
+        "window_days": summary.get("window_days"),
+        "videos_analyzed": summary.get("videos_analyzed", 0),
+        "detailed_analytics_available": bool(summary.get("detailed_analytics_available")),
+        "category_performance": compact_group_for_planner(summary.get("category_performance", {})),
+        "tone_performance": compact_group_for_planner(summary.get("tone_performance", {})),
+        "lead_gender_performance": compact_group_for_planner(summary.get("lead_gender_performance", {})),
+        "duration_performance": compact_group_for_planner(summary.get("duration_performance", {})),
+        "top_examples": [compact_example_for_planner(x) for x in summary.get("top_examples", []) if isinstance(x, dict)],
+    }
+    weak = [compact_example_for_planner(x) for x in summary.get("weak_retention_examples", []) if isinstance(x, dict)]
+    if weak:
+        projection["weak_retention_examples"] = weak
+    return projection
+
+
 def build_summary(root: Path, current: dict) -> dict:
     rows = performance_rows(all_snapshots(root, current))
     ranked = [r for r in rows if r.get("views_72h") is not None]
@@ -357,7 +411,7 @@ def build_summary(root: Path, current: dict) -> dict:
     weak = sorted(mature, key=lambda r: float(r.get("retention") or 0))[:5]
     categories = sorted({r.get("category", "unknown") for r in rows if r.get("category")})
     counts = {c: sum(r.get("category") == c for r in rows) for c in categories}
-    return {
+    summary = {
         "analytics_version": 1,
         "generated_at": current["collected_at"],
         "window_days": WINDOW_DAYS,
@@ -371,6 +425,8 @@ def build_summary(root: Path, current: dict) -> dict:
         "weak_retention_examples": [compact_example(r) for r in weak],
         "low_sample_categories": [{"category": c, "sample_size": counts[c]} for c in categories if counts[c] < 5],
     }
+    summary["planner_summary"] = planner_projection(summary)
+    return summary
 
 
 def patch_context(root: Path, summary: dict) -> None:
@@ -379,7 +435,7 @@ def patch_context(root: Path, summary: dict) -> None:
     if not isinstance(context, dict):
         raise RuntimeError("content/context.json must be an object")
     context["context_version"] = max(int(context.get("context_version", 1)), 2)
-    context["analytics_summary"] = summary
+    context["analytics_summary"] = summary.get("planner_summary", summary)
     raw = json.dumps(context, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
     if len(raw.encode()) > 60000:
         raise RuntimeError("Planner context exceeds 60000 bytes after analytics summary")
