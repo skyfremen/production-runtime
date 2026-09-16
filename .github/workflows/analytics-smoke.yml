@@ -12,5 +12,9 @@ permissions:
 jobs:
   smoke:
     runs-on: ubuntu-latest
+    env:
+      RUNTIME_AUTH_A: ${{ secrets.RUNTIME_AUTH_A }}
+      RUNTIME_AUTH_B: ${{ secrets.RUNTIME_AUTH_B }}
+      RUNTIME_AUTH_C: ${{ secrets.RUNTIME_AUTH_C }}
     steps:
       - run: echo analytics-smoke-ok
