@@ -275,11 +275,15 @@ def med(values):
 def duration_bucket(seconds):
     if not isinstance(seconds, (int, float)):
         return "unknown"
+    if seconds < 120:
+        return "under_120"
     if seconds < 140:
         return "120_139"
     if seconds < 160:
         return "140_159"
-    return "160_178"
+    if seconds <= 178:
+        return "160_178"
+    return "over_178"
 
 
 def performance_rows(snapshots: list[dict]) -> list[dict]:
@@ -293,8 +297,10 @@ def performance_rows(snapshots: list[dict]) -> list[dict]:
     for cid, obs in by_cid.items():
         obs.sort(key=lambda x: float(x.get("age_hours", 0)))
         latest = obs[-1]
+        p6 = closest_checkpoint(obs, 6, tolerance=4)
         p24 = closest_checkpoint(obs, 24)
         p72 = closest_checkpoint(obs, 72)
+        p7d = closest_checkpoint(obs, 168, tolerance=12)
         creative = latest.get("creative") or {}
         lm = latest.get("metrics") or {}
         out.append({
@@ -306,8 +312,10 @@ def performance_rows(snapshots: list[dict]) -> list[dict]:
             "lead_gender": creative.get("lead_gender", "") or "unknown",
             "duration_bucket": duration_bucket(latest.get("duration_seconds")),
             "duration_seconds": latest.get("duration_seconds"),
+            "views_6h": (p6.get("metrics") or {}).get("views") if p6 else None,
             "views_24h": (p24.get("metrics") or {}).get("views") if p24 else None,
             "views_72h": (p72.get("metrics") or {}).get("views") if p72 else None,
+            "views_7d": (p7d.get("metrics") or {}).get("views") if p7d else None,
             "retention": lm.get("average_view_percentage") if float(latest.get("age_hours", 0)) >= 72 else None,
             "subscribers_gained": lm.get("subscribers_gained") if float(latest.get("age_hours", 0)) >= 72 else None,
             "shares": lm.get("shares") if float(latest.get("age_hours", 0)) >= 72 else None,
@@ -323,10 +331,14 @@ def group_summary(rows: list[dict], key: str) -> dict:
     for name, items in sorted(groups.items()):
         out[name] = {
             "sample_size": len(items),
+            "sample_6h": sum(v.get("views_6h") is not None for v in items),
+            "median_views_6h": med([v.get("views_6h") for v in items]),
             "sample_24h": sum(v.get("views_24h") is not None for v in items),
             "median_views_24h": med([v.get("views_24h") for v in items]),
             "sample_72h": sum(v.get("views_72h") is not None for v in items),
             "median_views_72h": med([v.get("views_72h") for v in items]),
+            "sample_7d": sum(v.get("views_7d") is not None for v in items),
+            "median_views_7d": med([v.get("views_7d") for v in items]),
             "mature_sample": sum(v.get("retention") is not None for v in items),
             "median_average_view_percentage": med([v.get("retention") for v in items]),
             "median_subscribers_gained": med([v.get("subscribers_gained") for v in items]),
@@ -343,8 +355,10 @@ def compact_example(row: dict) -> dict:
         "category": row.get("category", ""),
         "story_tone": row.get("story_tone", ""),
         "duration_seconds": row.get("duration_seconds"),
+        "views_6h": row.get("views_6h"),
         "views_24h": row.get("views_24h"),
         "views_72h": row.get("views_72h"),
+        "views_7d": row.get("views_7d"),
         "average_view_percentage": row.get("retention"),
     }
 
@@ -355,12 +369,11 @@ def compact_group_for_planner(group: dict) -> dict:
         if not isinstance(metrics, dict):
             continue
         item = {"sample_size": int(metrics.get("sample_size", 0) or 0)}
-        sample_24h = int(metrics.get("sample_24h", 0) or 0)
-        if sample_24h > 0 and metrics.get("median_views_24h") is not None:
-            item["views_24h"] = {"sample": sample_24h, "median": metrics["median_views_24h"]}
-        sample_72h = int(metrics.get("sample_72h", 0) or 0)
-        if sample_72h > 0 and metrics.get("median_views_72h") is not None:
-            item["views_72h"] = {"sample": sample_72h, "median": metrics["median_views_72h"]}
+        for label in ("6h", "24h", "72h", "7d"):
+            sample = int(metrics.get(f"sample_{label}", 0) or 0)
+            median = metrics.get(f"median_views_{label}")
+            if sample > 0 and median is not None:
+                item[f"views_{label}"] = {"sample": sample, "median": median}
         mature = int(metrics.get("mature_sample", 0) or 0)
         if mature > 0:
             mature_data = {"sample": mature}
@@ -379,9 +392,33 @@ def compact_group_for_planner(group: dict) -> dict:
 def compact_example_for_planner(example: dict) -> dict:
     keys = (
         "content_id", "title", "premise", "category", "story_tone",
-        "duration_seconds", "views_24h", "views_72h", "average_view_percentage",
+        "duration_seconds", "views_6h", "views_24h", "views_72h", "views_7d", "average_view_percentage",
     )
     return {k: example[k] for k in keys if k in example and example[k] not in (None, "")}
+
+
+def learning_summary(rows: list[dict]) -> dict:
+    sample_6h = sum(r.get("views_6h") is not None for r in rows)
+    sample_24h = sum(r.get("views_24h") is not None for r in rows)
+    sample_72h = sum(r.get("views_72h") is not None for r in rows)
+    sample_7d = sum(r.get("views_7d") is not None for r in rows)
+    if sample_24h < 30 or sample_72h < 15:
+        stage, weight, minimum = "cold_start", "low", 5
+    elif sample_24h < 100 or sample_72h < 50 or sample_7d < 20:
+        stage, weight, minimum = "early_learning", "medium", 8
+    else:
+        stage, weight, minimum = "established", "normal", 12
+    return {
+        "stage": stage,
+        "analytics_weight": weight,
+        "minimum_pattern_sample": minimum,
+        "checkpoint_samples": {
+            "6h": sample_6h,
+            "24h": sample_24h,
+            "72h": sample_72h,
+            "7d": sample_7d,
+        },
+    }
 
 
 def planner_projection(summary: dict) -> dict:
@@ -391,6 +428,7 @@ def planner_projection(summary: dict) -> dict:
         "window_days": summary.get("window_days"),
         "videos_analyzed": summary.get("videos_analyzed", 0),
         "detailed_analytics_available": bool(summary.get("detailed_analytics_available")),
+        "learning": summary.get("learning", {}),
         "category_performance": compact_group_for_planner(summary.get("category_performance", {})),
         "tone_performance": compact_group_for_planner(summary.get("tone_performance", {})),
         "lead_gender_performance": compact_group_for_planner(summary.get("lead_gender_performance", {})),
@@ -405,11 +443,15 @@ def planner_projection(summary: dict) -> dict:
 
 def build_summary(root: Path, current: dict) -> dict:
     rows = performance_rows(all_snapshots(root, current))
-    ranked = [r for r in rows if r.get("views_72h") is not None]
-    if not ranked:
-        ranked = [r for r in rows if r.get("views_24h") is not None]
-    rank_key = "views_72h" if any(r.get("views_72h") is not None for r in ranked) else "views_24h"
-    top = sorted(ranked, key=lambda r: float(r.get(rank_key) or 0), reverse=True)[:5]
+    rank_key = None
+    for key in ("views_7d", "views_72h", "views_24h", "views_6h"):
+        if sum(r.get(key) is not None for r in rows) >= 5:
+            rank_key = key
+            break
+    if rank_key is None:
+        rank_key = next((key for key in ("views_7d", "views_72h", "views_24h", "views_6h") if any(r.get(key) is not None for r in rows)), None)
+    ranked = [r for r in rows if rank_key and r.get(rank_key) is not None]
+    top = sorted(ranked, key=lambda r: float(r.get(rank_key) or 0), reverse=True)[:5] if rank_key else []
     mature = [r for r in rows if r.get("retention") is not None]
     weak = sorted(mature, key=lambda r: float(r.get("retention") or 0))[:5]
     categories = sorted({r.get("category", "unknown") for r in rows if r.get("category")})
@@ -420,6 +462,7 @@ def build_summary(root: Path, current: dict) -> dict:
         "window_days": WINDOW_DAYS,
         "videos_analyzed": len(rows),
         "detailed_analytics_available": bool(current.get("detailed_analytics_available")),
+        "learning": learning_summary(rows),
         "category_performance": group_summary(rows, "category"),
         "tone_performance": group_summary(rows, "story_tone"),
         "lead_gender_performance": group_summary(rows, "lead_gender"),
