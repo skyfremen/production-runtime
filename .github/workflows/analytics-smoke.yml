@@ -1,0 +1,16 @@
+name: Analytics Smoke
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.analytics-smoke/**'
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo analytics-smoke-ok
