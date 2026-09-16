@@ -1,10 +1,6 @@
 name: Analytics
 
 on:
-  schedule:
-    # 01:30, 07:30, 13:30, 19:30 Asia/Singapore (UTC+8)
-    - cron: '30 5,11,17,23 * * *'
-  workflow_dispatch:
   push:
     branches: [main]
     paths:
@@ -13,14 +9,9 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: analytics
-  cancel-in-progress: false
-
 jobs:
   collect:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
     env:
       PRIVATE_STATE_REPOSITORY: ${{ secrets.PRIVATE_STATE_REPOSITORY }}
       PRIVATE_STATE_TOKEN: ${{ secrets.PRIVATE_STATE_TOKEN }}
@@ -30,8 +21,5 @@ jobs:
     steps:
       - name: Checkout runtime
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          fetch-depth: 1
-
-      - name: Collect, reduce, and persist analytics
+      - name: Collect analytics
         run: python runtime/analytics_remote.py
