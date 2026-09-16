@@ -1,0 +1,236 @@
+name: Analytics Learning Refresh (One-Off)
+
+on:
+  push:
+    paths:
+      - '.github/workflows/analytics-learning-refresh-once.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: exec
+    env:
+      PRIVATE_STATE_REPOSITORY: ${{ secrets.PRIVATE_STATE_REPOSITORY }}
+      PRIVATE_STATE_TOKEN: ${{ secrets.PRIVATE_STATE_TOKEN }}
+      RUNTIME_AUTH_A: ${{ secrets.RUNTIME_AUTH_A }}
+      RUNTIME_AUTH_B: ${{ secrets.RUNTIME_AUTH_B }}
+      RUNTIME_AUTH_C: ${{ secrets.RUNTIME_AUTH_C }}
+    steps:
+      - name: Patch analytics learning reducer
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import base64, json, os, urllib.request
+
+          repo = os.environ['GITHUB_REPOSITORY']
+          token = os.environ['GH_TOKEN']
+          path = 'runtime/analytics.py'
+          url = f'https://api.github.com/repos/{repo}/contents/{path}'
+          headers = {
+              'Authorization': f'Bearer {token}',
+              'Accept': 'application/vnd.github+json',
+              'Content-Type': 'application/json',
+          }
+          with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=30) as r:
+              doc = json.load(r)
+          text = base64.b64decode(doc['content']).decode('utf-8')
+
+          def replace_once(old, new, label):
+              global text
+              if old not in text:
+                  if new in text:
+                      return
+                  raise SystemExit(f'{label} marker not found')
+              text = text.replace(old, new, 1)
+
+          replace_once('''def duration_bucket(seconds):
+              if not isinstance(seconds, (int, float)):
+                  return "unknown"
+              if seconds < 140:
+                  return "120_139"
+              if seconds < 160:
+                  return "140_159"
+              return "160_178"
+          ''', '''def duration_bucket(seconds):
+              if not isinstance(seconds, (int, float)):
+                  return "unknown"
+              if seconds < 120:
+                  return "under_120"
+              if seconds < 140:
+                  return "120_139"
+              if seconds < 160:
+                  return "140_159"
+              if seconds <= 178:
+                  return "160_178"
+              return "over_178"
+          ''', 'duration bucket')
+
+          replace_once('''        latest = obs[-1]
+              p24 = closest_checkpoint(obs, 24)
+              p72 = closest_checkpoint(obs, 72)
+          ''', '''        latest = obs[-1]
+              p6 = closest_checkpoint(obs, 6, tolerance=4)
+              p24 = closest_checkpoint(obs, 24)
+              p72 = closest_checkpoint(obs, 72)
+              p7d = closest_checkpoint(obs, 168, tolerance=12)
+          ''', 'checkpoint selection')
+
+          replace_once('''            "duration_seconds": latest.get("duration_seconds"),
+                  "views_24h": (p24.get("metrics") or {}).get("views") if p24 else None,
+                  "views_72h": (p72.get("metrics") or {}).get("views") if p72 else None,
+          ''', '''            "duration_seconds": latest.get("duration_seconds"),
+                  "views_6h": (p6.get("metrics") or {}).get("views") if p6 else None,
+                  "views_24h": (p24.get("metrics") or {}).get("views") if p24 else None,
+                  "views_72h": (p72.get("metrics") or {}).get("views") if p72 else None,
+                  "views_7d": (p7d.get("metrics") or {}).get("views") if p7d else None,
+          ''', 'performance checkpoints')
+
+          replace_once('''        out[name] = {
+                  "sample_size": len(items),
+                  "sample_24h": sum(v.get("views_24h") is not None for v in items),
+                  "median_views_24h": med([v.get("views_24h") for v in items]),
+                  "sample_72h": sum(v.get("views_72h") is not None for v in items),
+                  "median_views_72h": med([v.get("views_72h") for v in items]),
+                  "mature_sample": sum(v.get("retention") is not None for v in items),
+          ''', '''        out[name] = {
+                  "sample_size": len(items),
+                  "sample_6h": sum(v.get("views_6h") is not None for v in items),
+                  "median_views_6h": med([v.get("views_6h") for v in items]),
+                  "sample_24h": sum(v.get("views_24h") is not None for v in items),
+                  "median_views_24h": med([v.get("views_24h") for v in items]),
+                  "sample_72h": sum(v.get("views_72h") is not None for v in items),
+                  "median_views_72h": med([v.get("views_72h") for v in items]),
+                  "sample_7d": sum(v.get("views_7d") is not None for v in items),
+                  "median_views_7d": med([v.get("views_7d") for v in items]),
+                  "mature_sample": sum(v.get("retention") is not None for v in items),
+          ''', 'group checkpoints')
+
+          replace_once('''        "duration_seconds": row.get("duration_seconds"),
+              "views_24h": row.get("views_24h"),
+              "views_72h": row.get("views_72h"),
+              "average_view_percentage": row.get("retention"),
+          ''', '''        "duration_seconds": row.get("duration_seconds"),
+              "views_6h": row.get("views_6h"),
+              "views_24h": row.get("views_24h"),
+              "views_72h": row.get("views_72h"),
+              "views_7d": row.get("views_7d"),
+              "average_view_percentage": row.get("retention"),
+          ''', 'compact example checkpoints')
+
+          replace_once('''        item = {"sample_size": int(metrics.get("sample_size", 0) or 0)}
+              sample_24h = int(metrics.get("sample_24h", 0) or 0)
+          ''', '''        item = {"sample_size": int(metrics.get("sample_size", 0) or 0)}
+              sample_6h = int(metrics.get("sample_6h", 0) or 0)
+              if sample_6h > 0 and metrics.get("median_views_6h") is not None:
+                  item["views_6h"] = {"sample": sample_6h, "median": metrics["median_views_6h"]}
+              sample_24h = int(metrics.get("sample_24h", 0) or 0)
+          ''', 'compact group 6h')
+
+          replace_once('''        if sample_72h > 0 and metrics.get("median_views_72h") is not None:
+                  item["views_72h"] = {"sample": sample_72h, "median": metrics["median_views_72h"]}
+              mature = int(metrics.get("mature_sample", 0) or 0)
+          ''', '''        if sample_72h > 0 and metrics.get("median_views_72h") is not None:
+                  item["views_72h"] = {"sample": sample_72h, "median": metrics["median_views_72h"]}
+              sample_7d = int(metrics.get("sample_7d", 0) or 0)
+              if sample_7d > 0 and metrics.get("median_views_7d") is not None:
+                  item["views_7d"] = {"sample": sample_7d, "median": metrics["median_views_7d"]}
+              mature = int(metrics.get("mature_sample", 0) or 0)
+          ''', 'compact group 7d')
+
+          replace_once('''        "content_id", "title", "premise", "category", "story_tone",
+                  "duration_seconds", "views_24h", "views_72h", "average_view_percentage",
+          ''', '''        "content_id", "title", "premise", "category", "story_tone",
+                  "duration_seconds", "views_6h", "views_24h", "views_72h", "views_7d", "average_view_percentage",
+          ''', 'planner example checkpoints')
+
+          marker = '''def planner_projection(summary: dict) -> dict:
+          '''
+          helper = '''def learning_summary(rows: list[dict]) -> dict:
+              sample_6h = sum(r.get("views_6h") is not None for r in rows)
+              sample_24h = sum(r.get("views_24h") is not None for r in rows)
+              sample_72h = sum(r.get("views_72h") is not None for r in rows)
+              sample_7d = sum(r.get("views_7d") is not None for r in rows)
+              if sample_24h < 20 or sample_72h < 10:
+                  stage, weight, minimum = "cold_start", "low", 5
+              elif sample_24h < 50 or sample_72h < 25:
+                  stage, weight, minimum = "early_learning", "medium", 8
+              else:
+                  stage, weight, minimum = "established", "normal", 10
+              return {
+                  "stage": stage,
+                  "analytics_weight": weight,
+                  "minimum_pattern_sample": minimum,
+                  "checkpoint_samples": {
+                      "6h": sample_6h,
+                      "24h": sample_24h,
+                      "72h": sample_72h,
+                      "7d": sample_7d,
+                  },
+              }
+
+
+          def planner_projection(summary: dict) -> dict:
+          '''
+          if 'def learning_summary(rows: list[dict])' not in text:
+              replace_once(marker, helper, 'learning summary insertion')
+
+          replace_once('''        "detailed_analytics_available": bool(summary.get("detailed_analytics_available")),
+              "category_performance": compact_group_for_planner(summary.get("category_performance", {})),
+          ''', '''        "detailed_analytics_available": bool(summary.get("detailed_analytics_available")),
+              "learning": summary.get("learning", {}),
+              "category_performance": compact_group_for_planner(summary.get("category_performance", {})),
+          ''', 'planner learning projection')
+
+          replace_once('''    rows = performance_rows(all_snapshots(root, current))
+              ranked = [r for r in rows if r.get("views_72h") is not None]
+              if not ranked:
+                  ranked = [r for r in rows if r.get("views_24h") is not None]
+              rank_key = "views_72h" if any(r.get("views_72h") is not None for r in ranked) else "views_24h"
+              top = sorted(ranked, key=lambda r: float(r.get(rank_key) or 0), reverse=True)[:5]
+          ''', '''    rows = performance_rows(all_snapshots(root, current))
+              rank_key = next((key for key in ("views_7d", "views_72h", "views_24h", "views_6h") if any(r.get(key) is not None for r in rows)), None)
+              ranked = [r for r in rows if rank_key and r.get(rank_key) is not None]
+              top = sorted(ranked, key=lambda r: float(r.get(rank_key) or 0), reverse=True)[:5] if rank_key else []
+          ''', 'top example ranking')
+
+          replace_once('''        "detailed_analytics_available": bool(current.get("detailed_analytics_available")),
+              "category_performance": group_summary(rows, "category"),
+          ''', '''        "detailed_analytics_available": bool(current.get("detailed_analytics_available")),
+              "learning": learning_summary(rows),
+              "category_performance": group_summary(rows, "category"),
+          ''', 'summary learning field')
+
+          compile(text, path, 'exec')
+          body = json.dumps({
+              'message': 'feat: add analytics learning stages and checkpoints',
+              'content': base64.b64encode(text.encode()).decode(),
+              'sha': doc['sha'],
+          }).encode()
+          req = urllib.request.Request(url, data=body, method='PUT', headers=headers)
+          with urllib.request.urlopen(req, timeout=30) as r:
+              out = json.load(r)
+          print('RUNTIME_COMMIT', out['commit']['sha'])
+          PY
+
+      - name: Load latest runtime source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os, urllib.request
+          url=f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/tarball/main"
+          urllib.request.urlretrieve(url,"/tmp/runtime-source.tgz")
+          PY
+          rm -rf /tmp/runtime-source
+          mkdir -p /tmp/runtime-source
+          tar --extract --gzip --file /tmp/runtime-source.tgz --strip-components 1 --directory /tmp/runtime-source
+
+      - name: Refresh analytics context
+        run: python /tmp/runtime-source/runtime/analytics_remote.py
