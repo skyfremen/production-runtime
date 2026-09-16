@@ -5,6 +5,10 @@ on:
     # 01:30, 07:30, 13:30, 19:30 Asia/Singapore (UTC+8)
     - cron: '30 5,11,17,23 * * *'
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.analytics-trigger/**'
 
 permissions:
   contents: read
