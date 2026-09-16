@@ -180,7 +180,7 @@ def collect_analytics_api(rows: list[dict], token: str, now: datetime) -> tuple[
     start = (now - timedelta(days=WINDOW_DAYS)).date().isoformat()
     end = now.date().isoformat()
     try:
-        for batch_rows in chunks(rows, 500):
+        for batch_rows in chunks(rows, 200):
             ids = [r["youtube_video_id"] for r in batch_rows]
             report = analytics_report({
                 "ids": "channel==MINE",
@@ -189,6 +189,7 @@ def collect_analytics_api(rows: list[dict], token: str, now: datetime) -> tuple[
                 "metrics": ANALYTICS_METRICS,
                 "dimensions": "video",
                 "filters": "video==" + ",".join(ids),
+                "sort": "-views",
                 "maxResults": len(ids),
             }, token)
             headers = [str(h.get("name")) for h in report.get("columnHeaders", [])]
