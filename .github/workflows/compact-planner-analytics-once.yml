@@ -6,7 +6,7 @@ on:
       - '.github/workflows/compact-planner-analytics-once.yml'
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   migrate:
@@ -16,95 +16,20 @@ jobs:
     env:
       PRIVATE_STATE_REPOSITORY: ${{ secrets.PRIVATE_STATE_REPOSITORY }}
       PRIVATE_STATE_TOKEN: ${{ secrets.PRIVATE_STATE_TOKEN }}
-      PUBLIC_REPOSITORY: ${{ github.repository }}
-      PUBLIC_TOKEN: ${{ github.token }}
+      RUNTIME_AUTH_A: ${{ secrets.RUNTIME_AUTH_A }}
+      RUNTIME_AUTH_B: ${{ secrets.RUNTIME_AUTH_B }}
+      RUNTIME_AUTH_C: ${{ secrets.RUNTIME_AUTH_C }}
     steps:
-      - name: Finalize compact analytics summary and refresh state
+      - name: Load exact runtime source
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
-          import base64
-          import json
-          import os
-          import pathlib
-          import shutil
-          import subprocess
-          import sys
-          import tarfile
-          import tempfile
-          import urllib.request
-
-          repo = os.environ['PUBLIC_REPOSITORY']
-          token = os.environ['PUBLIC_TOKEN']
-          path = 'runtime/analytics.py'
-          headers = {
-              'Authorization': f'Bearer {token}',
-              'Accept': 'application/vnd.github+json',
-              'X-GitHub-Api-Version': '2022-11-28',
-              'Content-Type': 'application/json',
-          }
-
-          url = f'https://api.github.com/repos/{repo}/contents/{path}'
-          with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=60) as response:
-              doc = json.load(response)
-          content = base64.b64decode(doc['content']).decode('utf-8')
-
-          old = '    summary["planner_summary"] = planner_projection(summary)\n    return summary\n'
-          new = '    return planner_projection(summary)\n'
-          if old in content:
-              content = content.replace(old, new, 1)
-          elif new not in content:
-              raise SystemExit('analytics.py compact summary return marker not found')
-
-          old = '    context["analytics_summary"] = summary.get("planner_summary", summary)\n'
-          new = '    context["analytics_summary"] = summary\n'
-          if old in content:
-              content = content.replace(old, new, 1)
-          elif new not in content:
-              raise SystemExit('analytics.py context marker not found')
-
-          compile(content, path, 'exec')
-          body = json.dumps({
-              'message': 'fix: keep analytics summary planner-compact',
-              'content': base64.b64encode(content.encode('utf-8')).decode('ascii'),
-              'sha': doc['sha'],
-          }).encode()
-          req = urllib.request.Request(url, data=body, method='PUT', headers=headers)
-          with urllib.request.urlopen(req, timeout=60) as response:
-              patched = json.load(response)
-          commit_sha = patched['commit']['sha']
-          print('RUNTIME_COMMIT', commit_sha)
-
-          # Run the newly patched runtime once so analytics-summary.json and
-          # content/context.json become compact immediately.
-          work = pathlib.Path(tempfile.mkdtemp(prefix='compact-analytics-'))
-          try:
-              archive = work / 'runtime.tgz'
-              tar_headers = {
-                  'Authorization': f'Bearer {token}',
-                  'Accept': 'application/vnd.github+json',
-                  'X-GitHub-Api-Version': '2022-11-28',
-              }
-              req = urllib.request.Request(
-                  f'https://api.github.com/repos/{repo}/tarball/{commit_sha}',
-                  headers=tar_headers,
-              )
-              with urllib.request.urlopen(req, timeout=120) as response, archive.open('wb') as out:
-                  shutil.copyfileobj(response, out)
-              extract = work / 'extract'
-              extract.mkdir()
-              with tarfile.open(archive, 'r:gz') as tf:
-                  tf.extractall(extract)
-              roots = [p for p in extract.iterdir() if p.is_dir()]
-              if len(roots) != 1:
-                  raise SystemExit('unexpected runtime tarball layout')
-              subprocess.run(
-                  [sys.executable, str(roots[0] / 'runtime' / 'analytics_remote.py')],
-                  cwd=roots[0],
-                  check=True,
-                  env=os.environ.copy(),
-              )
-          finally:
-              shutil.rmtree(work, ignore_errors=True)
+          import os, urllib.request
+          url=f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/tarball/{os.environ['GITHUB_SHA']}"
+          urllib.request.urlretrieve(url,"/tmp/runtime-source.tgz")
           PY
+          tar --extract --gzip --file /tmp/runtime-source.tgz --strip-components 1 --directory "${GITHUB_WORKSPACE}"
+
+      - name: Refresh compact analytics state
+        run: python runtime/analytics_remote.py
