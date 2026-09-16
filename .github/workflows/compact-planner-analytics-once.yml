@@ -1,0 +1,208 @@
+name: Compact Planner Analytics (One-Off)
+
+on:
+  push:
+    paths:
+      - '.github/workflows/compact-planner-analytics-once.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: exec
+    env:
+      PRIVATE_STATE_REPOSITORY: ${{ secrets.PRIVATE_STATE_REPOSITORY }}
+      PRIVATE_STATE_TOKEN: ${{ secrets.PRIVATE_STATE_TOKEN }}
+      PUBLIC_REPOSITORY: ${{ github.repository }}
+      PUBLIC_TOKEN: ${{ github.token }}
+    steps:
+      - name: Compact planner analytics contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import base64
+          import json
+          import os
+          import urllib.request
+
+          def get_file(repo, path, token):
+              req = urllib.request.Request(
+                  f"https://api.github.com/repos/{repo}/contents/{path}",
+                  headers={
+                      "Authorization": f"Bearer {token}",
+                      "Accept": "application/vnd.github+json",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              with urllib.request.urlopen(req, timeout=60) as response:
+                  doc = json.load(response)
+              return base64.b64decode(doc["content"]).decode("utf-8"), doc["sha"]
+
+          def put_file(repo, path, token, content, sha, message):
+              body = json.dumps({
+                  "message": message,
+                  "content": base64.b64encode(content.encode("utf-8")).decode("ascii"),
+                  "sha": sha,
+              }).encode()
+              req = urllib.request.Request(
+                  f"https://api.github.com/repos/{repo}/contents/{path}",
+                  data=body,
+                  method="PUT",
+                  headers={
+                      "Authorization": f"Bearer {token}",
+                      "Accept": "application/vnd.github+json",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                      "Content-Type": "application/json",
+                  },
+              )
+              with urllib.request.urlopen(req, timeout=60) as response:
+                  return json.load(response)["commit"]["sha"]
+
+          def compact_group(group):
+              out = {}
+              for name, metrics in sorted((group or {}).items()):
+                  if not isinstance(metrics, dict):
+                      continue
+                  item = {"sample_size": int(metrics.get("sample_size", 0) or 0)}
+                  sample_24h = int(metrics.get("sample_24h", 0) or 0)
+                  if sample_24h > 0 and metrics.get("median_views_24h") is not None:
+                      item["views_24h"] = {"sample": sample_24h, "median": metrics["median_views_24h"]}
+                  sample_72h = int(metrics.get("sample_72h", 0) or 0)
+                  if sample_72h > 0 and metrics.get("median_views_72h") is not None:
+                      item["views_72h"] = {"sample": sample_72h, "median": metrics["median_views_72h"]}
+                  mature = int(metrics.get("mature_sample", 0) or 0)
+                  if mature > 0:
+                      mature_data = {"sample": mature}
+                      for source, target in (
+                          ("median_average_view_percentage", "average_view_percentage"),
+                          ("median_subscribers_gained", "subscribers_gained"),
+                          ("median_shares", "shares"),
+                      ):
+                          if metrics.get(source) is not None:
+                              mature_data[target] = metrics[source]
+                      item["mature"] = mature_data
+                  out[name] = item
+              return out
+
+          def compact_example(example):
+              keys = (
+                  "content_id", "title", "premise", "category", "story_tone",
+                  "duration_seconds", "views_24h", "views_72h", "average_view_percentage",
+              )
+              return {k: example[k] for k in keys if k in example and example[k] not in (None, "")}
+
+          def planner_projection(summary):
+              projection = {
+                  "analytics_version": summary.get("analytics_version", 1),
+                  "generated_at": summary.get("generated_at"),
+                  "window_days": summary.get("window_days"),
+                  "videos_analyzed": summary.get("videos_analyzed", 0),
+                  "detailed_analytics_available": bool(summary.get("detailed_analytics_available")),
+                  "category_performance": compact_group(summary.get("category_performance")),
+                  "tone_performance": compact_group(summary.get("tone_performance")),
+                  "lead_gender_performance": compact_group(summary.get("lead_gender_performance")),
+                  "duration_performance": compact_group(summary.get("duration_performance")),
+                  "top_examples": [compact_example(x) for x in summary.get("top_examples", []) if isinstance(x, dict)],
+              }
+              weak = [compact_example(x) for x in summary.get("weak_retention_examples", []) if isinstance(x, dict)]
+              if weak:
+                  projection["weak_retention_examples"] = weak
+              return projection
+
+          public_repo = os.environ["PUBLIC_REPOSITORY"]
+          public_token = os.environ["PUBLIC_TOKEN"]
+          private_repo = os.environ["PRIVATE_STATE_REPOSITORY"]
+          private_token = os.environ["PRIVATE_STATE_TOKEN"]
+
+          # 1) Runtime: keep full analytics summary, add a compact planner projection,
+          # and write only that projection into content/context.json.
+          path = "runtime/analytics.py"
+          content, sha = get_file(public_repo, path, public_token)
+          marker = "\n\ndef build_summary(root: Path, current: dict) -> dict:\n"
+          helper = '''\n\ndef compact_group_for_planner(group: dict) -> dict:\n    out = {}\n    for name, metrics in sorted((group or {}).items()):\n        if not isinstance(metrics, dict):\n            continue\n        item = {"sample_size": int(metrics.get("sample_size", 0) or 0)}\n        sample_24h = int(metrics.get("sample_24h", 0) or 0)\n        if sample_24h > 0 and metrics.get("median_views_24h") is not None:\n            item["views_24h"] = {"sample": sample_24h, "median": metrics["median_views_24h"]}\n        sample_72h = int(metrics.get("sample_72h", 0) or 0)\n        if sample_72h > 0 and metrics.get("median_views_72h") is not None:\n            item["views_72h"] = {"sample": sample_72h, "median": metrics["median_views_72h"]}\n        mature = int(metrics.get("mature_sample", 0) or 0)\n        if mature > 0:\n            mature_data = {"sample": mature}\n            for source, target in (\n                ("median_average_view_percentage", "average_view_percentage"),\n                ("median_subscribers_gained", "subscribers_gained"),\n                ("median_shares", "shares"),\n            ):\n                if metrics.get(source) is not None:\n                    mature_data[target] = metrics[source]\n            item["mature"] = mature_data\n        out[name] = item\n    return out\n\n\ndef compact_example_for_planner(example: dict) -> dict:\n    keys = (\n        "content_id", "title", "premise", "category", "story_tone",\n        "duration_seconds", "views_24h", "views_72h", "average_view_percentage",\n    )\n    return {k: example[k] for k in keys if k in example and example[k] not in (None, "")}\n\n\ndef planner_projection(summary: dict) -> dict:\n    projection = {\n        "analytics_version": summary.get("analytics_version", 1),\n        "generated_at": summary.get("generated_at"),\n        "window_days": summary.get("window_days"),\n        "videos_analyzed": summary.get("videos_analyzed", 0),\n        "detailed_analytics_available": bool(summary.get("detailed_analytics_available")),\n        "category_performance": compact_group_for_planner(summary.get("category_performance", {})),\n        "tone_performance": compact_group_for_planner(summary.get("tone_performance", {})),\n        "lead_gender_performance": compact_group_for_planner(summary.get("lead_gender_performance", {})),\n        "duration_performance": compact_group_for_planner(summary.get("duration_performance", {})),\n        "top_examples": [compact_example_for_planner(x) for x in summary.get("top_examples", []) if isinstance(x, dict)],\n    }\n    weak = [compact_example_for_planner(x) for x in summary.get("weak_retention_examples", []) if isinstance(x, dict)]\n    if weak:\n        projection["weak_retention_examples"] = weak\n    return projection\n'''
+          if "def planner_projection(summary: dict)" not in content:
+              if marker not in content:
+                  raise SystemExit("analytics.py build_summary marker not found")
+              content = content.replace(marker, helper + marker, 1)
+
+          old = '    counts = {c: sum(r.get("category") == c for r in rows) for c in categories}\n    return {\n'
+          new = '    counts = {c: sum(r.get("category") == c for r in rows) for c in categories}\n    summary = {\n'
+          if old in content:
+              content = content.replace(old, new, 1)
+          elif new not in content:
+              raise SystemExit("analytics.py summary assignment marker not found")
+
+          old = '        "low_sample_categories": [{"category": c, "sample_size": counts[c]} for c in categories if counts[c] < 5],\n    }\n\n\ndef patch_context(root: Path, summary: dict) -> None:\n'
+          new = '        "low_sample_categories": [{"category": c, "sample_size": counts[c]} for c in categories if counts[c] < 5],\n    }\n    summary["planner_summary"] = planner_projection(summary)\n    return summary\n\n\ndef patch_context(root: Path, summary: dict) -> None:\n'
+          if old in content:
+              content = content.replace(old, new, 1)
+          elif 'summary["planner_summary"] = planner_projection(summary)' not in content:
+              raise SystemExit("analytics.py summary return marker not found")
+
+          old = '    context["analytics_summary"] = summary\n'
+          new = '    context["analytics_summary"] = summary.get("planner_summary", summary)\n'
+          if old in content:
+              content = content.replace(old, new, 1)
+          elif new not in content:
+              raise SystemExit("analytics.py context projection marker not found")
+
+          compile(content, path, "exec")
+          public_commit = put_file(
+              public_repo, path, public_token, content, sha,
+              "fix: compact analytics in planner context",
+          )
+          print("PUBLIC_ANALYTICS_COMMIT", public_commit)
+
+          # 2) Private context rebuilds must also select planner_summary instead of
+          # re-injecting the full analytics document.
+          for private_path in (".github/workflows/context.yml", ".github/workflows/result.yml"):
+              private_content, private_sha = get_file(private_repo, private_path, private_token)
+              old = '          context["analytics_summary"] = summary\n'
+              new = '          context["analytics_summary"] = summary.get("planner_summary", summary)\n'
+              if old in private_content:
+                  private_content = private_content.replace(old, new, 1)
+              elif new not in private_content:
+                  raise SystemExit(f"{private_path}: analytics merge marker not found")
+              commit = put_file(
+                  private_repo, private_path, private_token, private_content, private_sha,
+                  "fix: preserve compact planner analytics context",
+              )
+              print("PRIVATE_WORKFLOW_COMMIT", private_path, commit)
+
+          # 3) Migrate the current derived state immediately so context.json is
+          # compact now, not only after the next scheduled analytics run.
+          summary_path = "content/analytics-summary.json"
+          summary_text, summary_sha = get_file(private_repo, summary_path, private_token)
+          summary = json.loads(summary_text)
+          if not isinstance(summary, dict):
+              raise SystemExit("analytics-summary.json must be an object")
+          summary["planner_summary"] = planner_projection(summary)
+          summary_text = json.dumps(summary, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+          commit = put_file(
+              private_repo, summary_path, private_token, summary_text, summary_sha,
+              "[analytics] add compact planner projection",
+          )
+          print("PRIVATE_SUMMARY_COMMIT", commit)
+
+          context_path = "content/context.json"
+          context_text, context_sha = get_file(private_repo, context_path, private_token)
+          context = json.loads(context_text)
+          if not isinstance(context, dict):
+              raise SystemExit("content/context.json must be an object")
+          context["context_version"] = max(int(context.get("context_version", 1)), 2)
+          context["analytics_summary"] = summary["planner_summary"]
+          context_text = json.dumps(context, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+          size = len(context_text.encode("utf-8"))
+          if size > 60000:
+              raise SystemExit(f"compact planner context still too large: {size} bytes")
+          commit = put_file(
+              private_repo, context_path, private_token, context_text, context_sha,
+              "[state] compact planner analytics context",
+          )
+          print("PRIVATE_CONTEXT_COMMIT", commit)
+          print("COMPACT_CONTEXT_BYTES", size)
+          PY
