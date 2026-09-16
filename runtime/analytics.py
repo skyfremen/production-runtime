@@ -425,8 +425,7 @@ def build_summary(root: Path, current: dict) -> dict:
         "weak_retention_examples": [compact_example(r) for r in weak],
         "low_sample_categories": [{"category": c, "sample_size": counts[c]} for c in categories if counts[c] < 5],
     }
-    summary["planner_summary"] = planner_projection(summary)
-    return summary
+    return planner_projection(summary)
 
 
 def patch_context(root: Path, summary: dict) -> None:
@@ -435,7 +434,7 @@ def patch_context(root: Path, summary: dict) -> None:
     if not isinstance(context, dict):
         raise RuntimeError("content/context.json must be an object")
     context["context_version"] = max(int(context.get("context_version", 1)), 2)
-    context["analytics_summary"] = summary.get("planner_summary", summary)
+    context["analytics_summary"] = summary
     raw = json.dumps(context, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
     if len(raw.encode()) > 60000:
         raise RuntimeError("Planner context exceeds 60000 bytes after analytics summary")
