@@ -139,7 +139,7 @@ def eligible_videos(root: Path, creative: dict[str, dict], now: datetime) -> lis
             result = read_json(path)
             cid = str(result.get("content_id", ""))
             vid = str(result.get("youtube_video_id", ""))
-            published = parse_dt(str(result.get("publish_at", "")))
+            published = parse_dt(str(result.get("publish_at") or result.get("published_at") or ""))
         except Exception:
             continue
         if not CID_RE.fullmatch(cid) or not VIDEO_RE.fullmatch(vid):
