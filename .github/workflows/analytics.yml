@@ -21,7 +21,6 @@ jobs:
   collect:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    environment: exec
     env:
       RUNTIME_AUTH_A: ${{ secrets.RUNTIME_AUTH_A }}
       RUNTIME_AUTH_B: ${{ secrets.RUNTIME_AUTH_B }}
