@@ -106,8 +106,11 @@ def load_creative_map(root: Path) -> dict[str, dict]:
             doc = read_json(path)
         except Exception:
             continue
-        items = doc.get("items") if isinstance(doc, dict) else None
-        if not isinstance(items, list):
+        if isinstance(doc, dict) and isinstance(doc.get("items"), list):
+            items = doc["items"]
+        elif isinstance(doc, dict) and CID_RE.fullmatch(str(doc.get("content_id", ""))):
+            items = [doc]
+        else:
             continue
         for item in items:
             if not isinstance(item, dict):
