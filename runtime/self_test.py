@@ -16,7 +16,7 @@ def ok(condition,name):
 def sample_request():
     script_words=["word"]*360; payoff="the receipt proved everything"; script_words[200:205]=payoff.split()
     return {"request_version":2,"content_id":"wd-"+"a"*24,"source_draft_id":"draft-selftest01","channel":{"name":"Wacky Dramas","handle":"@WACKYDRAMAS"},
-      "story":{"category":"work","premise":"A coworker steals credit.","conflict":"The liar gets praised.","twist":"A timestamped receipt exists.","hook":"Everyone believed the wrong person.","script":" ".join(script_words),"lead_gender":"female","story_tone":"dramatic","punchline":payoff,"card_emojis":["😳","💬","🔥","👀"],"trend_aware":True,"trend_topic":"GTA 6"},
+      "story":{"category":"work","premise":"A coworker steals credit.","conflict":"The liar gets praised.","twist":"A timestamped receipt exists.","hook":"Everyone believed the wrong person.","hook_type":"accusation","script":" ".join(script_words),"lead_gender":"female","story_tone":"dramatic","punchline":payoff,"card_emojis":["😳","💬","🔥","👀"],"trend_aware":True,"trend_topic":"GTA 6"},
       "narration":{"engine":"kokoro","voice":"af_bella","speed":1.75},
       "background":{"mode":"concatenated_fit_to_short","segments":[{"background_id":"a","segment_start_seconds":0.0,"segment_duration_seconds":60.0},{"background_id":"b","segment_start_seconds":0.0,"segment_duration_seconds":60.0},{"background_id":"c","segment_start_seconds":0.0,"segment_duration_seconds":60.0}]},
       "youtube":{"title":"The Receipt Changed Everything","description":"A workplace story.","hashtags":["#WackyDramas","#Shorts"],"tags":["Wacky Dramas","Shorts"],"category_id":"24","made_for_kids":False},
@@ -40,7 +40,12 @@ def main():
         if label=="missing": q["story"].pop("punchline")
         else: q["story"]["punchline"]=value
         validate_request_data(q); ok(True,f"{label} punchline is non-blocking")
-    legacy=json.loads(json.dumps(request)); legacy["story"].pop("trend_aware"); legacy["story"].pop("trend_topic"); validate_request_data(legacy); ok(True,"legacy request without trend provenance remains valid")
+    no_hook=json.loads(json.dumps(request)); no_hook["story"].pop("hook_type"); validate_request_data(no_hook); ok(True,"legacy request without hook type remains valid")
+    bad_hook=json.loads(json.dumps(request)); bad_hook["story"]["hook_type"]="mystery"
+    try: validate_request_data(bad_hook)
+    except ValueError: ok(True,"unsupported hook type rejected")
+    else: raise AssertionError("unsupported hook type must fail")
+    legacy=json.loads(json.dumps(request)); legacy["story"].pop("hook_type"); legacy["story"].pop("trend_aware"); legacy["story"].pop("trend_topic"); validate_request_data(legacy); ok(True,"legacy request without creative provenance remains valid")
     evergreen=json.loads(json.dumps(request)); evergreen["story"]["trend_aware"]=False; evergreen["story"]["trend_topic"]=None; validate_request_data(evergreen); ok(True,"evergreen trend provenance validates")
     bad=json.loads(json.dumps(request)); bad["story"]["trend_aware"]=True; bad["story"]["trend_topic"]=None
     try: validate_request_data(bad)
