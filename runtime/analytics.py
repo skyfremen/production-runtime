@@ -19,6 +19,7 @@ WINDOW_DAYS = 30
 CID_RE = re.compile(r"^wd-[0-9a-f]{24}$")
 VIDEO_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 ANALYTICS_METRICS = "views,engagedViews,averageViewDuration,averageViewPercentage,likes,comments,shares,subscribersGained"
+HOOK_TYPES = {"accusation", "discovery", "contradiction", "money_stakes", "social_exposure", "urgency", "confession", "consequence_first"}
 
 
 def now_utc() -> datetime:
@@ -124,6 +125,8 @@ def load_creative_map(root: Path) -> dict[str, dict]:
             trend_aware = raw_aware if type(raw_aware) is bool else None
             raw_topic = story.get("trend_topic")
             trend_topic = raw_topic.strip() if trend_aware is True and isinstance(raw_topic, str) and raw_topic.strip() else None
+            raw_hook_type = story.get("hook_type")
+            hook_type = raw_hook_type if isinstance(raw_hook_type, str) and raw_hook_type in HOOK_TYPES else None
             out[cid] = {
                 "title": str(youtube.get("title", "")),
                 "premise": str(story.get("premise", "")),
@@ -131,6 +134,7 @@ def load_creative_map(root: Path) -> dict[str, dict]:
                 "conflict": str(story.get("conflict", "")),
                 "twist": str(story.get("twist", "")),
                 "hook": str(story.get("hook", "")),
+                "hook_type": hook_type,
                 "payoff": str(story.get("punchline", "")),
                 "story_tone": str(story.get("story_tone", "")),
                 "lead_gender": str(story.get("lead_gender", "")),
@@ -311,6 +315,7 @@ def performance_rows(snapshots: list[dict]) -> list[dict]:
         lm = latest.get("metrics") or {}
         aware = creative.get("trend_aware")
         trend_lane = "trend_aware" if aware is True else "evergreen" if aware is False else "untracked"
+        hook_type = creative.get("hook_type") if creative.get("hook_type") in HOOK_TYPES else "untracked"
         out.append({
             "content_id": cid,
             "title": creative.get("title", ""),
@@ -318,6 +323,8 @@ def performance_rows(snapshots: list[dict]) -> list[dict]:
             "category": creative.get("category", "") or "unknown",
             "story_tone": creative.get("story_tone", "") or "unknown",
             "lead_gender": creative.get("lead_gender", "") or "unknown",
+            "hook": creative.get("hook", ""),
+            "hook_type": hook_type,
             "trend_lane": trend_lane,
             "trend_topic": creative.get("trend_topic") if trend_lane == "trend_aware" else None,
             "duration_bucket": duration_bucket(latest.get("duration_seconds")),
@@ -369,6 +376,8 @@ def compact_example(row: dict) -> dict:
         "premise": row.get("premise", ""),
         "category": row.get("category", ""),
         "story_tone": row.get("story_tone", ""),
+        "hook": row.get("hook", ""),
+        "hook_type": row.get("hook_type", "untracked"),
         "trend_lane": row.get("trend_lane", "untracked"),
         "trend_topic": row.get("trend_topic"),
         "duration_seconds": row.get("duration_seconds"),
@@ -418,7 +427,7 @@ def compact_trend_topics_for_planner(group: dict, limit: int = 20) -> dict:
 
 def compact_example_for_planner(example: dict) -> dict:
     keys = (
-        "content_id", "title", "premise", "category", "story_tone", "trend_lane", "trend_topic",
+        "content_id", "title", "premise", "category", "story_tone", "hook", "hook_type", "trend_lane", "trend_topic",
         "duration_seconds", "views_6h", "views_24h", "views_72h", "views_7d", "average_view_percentage",
     )
     return {k: example[k] for k in keys if k in example and example[k] not in (None, "")}
@@ -460,6 +469,7 @@ def planner_projection(summary: dict) -> dict:
         "tone_performance": compact_group_for_planner(summary.get("tone_performance", {})),
         "lead_gender_performance": compact_group_for_planner(summary.get("lead_gender_performance", {})),
         "duration_performance": compact_group_for_planner(summary.get("duration_performance", {})),
+        "hook_type_performance": compact_group_for_planner(summary.get("hook_type_performance", {})),
         "trend_performance": compact_group_for_planner(summary.get("trend_performance", {})),
         "top_examples": [compact_example_for_planner(x) for x in summary.get("top_examples", []) if isinstance(x, dict)],
     }
@@ -498,6 +508,7 @@ def build_summary(root: Path, current: dict) -> dict:
         "tone_performance": group_summary(rows, "story_tone"),
         "lead_gender_performance": group_summary(rows, "lead_gender"),
         "duration_performance": group_summary(rows, "duration_bucket"),
+        "hook_type_performance": group_summary(rows, "hook_type"),
         "trend_performance": group_summary(rows, "trend_lane"),
         "trend_topic_performance": trend_topic_summary(rows),
         "top_examples": [compact_example(r) for r in top],
