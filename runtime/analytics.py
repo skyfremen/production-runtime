@@ -120,6 +120,10 @@ def load_creative_map(root: Path) -> dict[str, dict]:
                 continue
             story = item.get("story") if isinstance(item.get("story"), dict) else {}
             youtube = item.get("youtube") if isinstance(item.get("youtube"), dict) else {}
+            raw_aware = story.get("trend_aware")
+            trend_aware = raw_aware if type(raw_aware) is bool else None
+            raw_topic = story.get("trend_topic")
+            trend_topic = raw_topic.strip() if trend_aware is True and isinstance(raw_topic, str) and raw_topic.strip() else None
             out[cid] = {
                 "title": str(youtube.get("title", "")),
                 "premise": str(story.get("premise", "")),
@@ -130,6 +134,8 @@ def load_creative_map(root: Path) -> dict[str, dict]:
                 "payoff": str(story.get("punchline", "")),
                 "story_tone": str(story.get("story_tone", "")),
                 "lead_gender": str(story.get("lead_gender", "")),
+                "trend_aware": trend_aware,
+                "trend_topic": trend_topic,
             }
     return out
 
@@ -303,6 +309,8 @@ def performance_rows(snapshots: list[dict]) -> list[dict]:
         p7d = closest_checkpoint(obs, 168, tolerance=12)
         creative = latest.get("creative") or {}
         lm = latest.get("metrics") or {}
+        aware = creative.get("trend_aware")
+        trend_lane = "trend_aware" if aware is True else "evergreen" if aware is False else "untracked"
         out.append({
             "content_id": cid,
             "title": creative.get("title", ""),
@@ -310,6 +318,8 @@ def performance_rows(snapshots: list[dict]) -> list[dict]:
             "category": creative.get("category", "") or "unknown",
             "story_tone": creative.get("story_tone", "") or "unknown",
             "lead_gender": creative.get("lead_gender", "") or "unknown",
+            "trend_lane": trend_lane,
+            "trend_topic": creative.get("trend_topic") if trend_lane == "trend_aware" else None,
             "duration_bucket": duration_bucket(latest.get("duration_seconds")),
             "duration_seconds": latest.get("duration_seconds"),
             "views_6h": (p6.get("metrics") or {}).get("views") if p6 else None,
@@ -347,6 +357,11 @@ def group_summary(rows: list[dict], key: str) -> dict:
     return out
 
 
+def trend_topic_summary(rows: list[dict]) -> dict:
+    tracked = [r for r in rows if r.get("trend_lane") == "trend_aware" and r.get("trend_topic")]
+    return group_summary(tracked, "trend_topic")
+
+
 def compact_example(row: dict) -> dict:
     return {
         "content_id": row["content_id"],
@@ -354,6 +369,8 @@ def compact_example(row: dict) -> dict:
         "premise": row.get("premise", ""),
         "category": row.get("category", ""),
         "story_tone": row.get("story_tone", ""),
+        "trend_lane": row.get("trend_lane", "untracked"),
+        "trend_topic": row.get("trend_topic"),
         "duration_seconds": row.get("duration_seconds"),
         "views_6h": row.get("views_6h"),
         "views_24h": row.get("views_24h"),
@@ -389,9 +406,19 @@ def compact_group_for_planner(group: dict) -> dict:
     return out
 
 
+def compact_trend_topics_for_planner(group: dict, limit: int = 20) -> dict:
+    eligible = [
+        (name, metrics)
+        for name, metrics in (group or {}).items()
+        if isinstance(metrics, dict) and int(metrics.get("sample_size", 0) or 0) >= 2
+    ]
+    eligible.sort(key=lambda pair: (-int(pair[1].get("sample_size", 0) or 0), pair[0].casefold(), pair[0]))
+    return compact_group_for_planner(dict(eligible[:limit]))
+
+
 def compact_example_for_planner(example: dict) -> dict:
     keys = (
-        "content_id", "title", "premise", "category", "story_tone",
+        "content_id", "title", "premise", "category", "story_tone", "trend_lane", "trend_topic",
         "duration_seconds", "views_6h", "views_24h", "views_72h", "views_7d", "average_view_percentage",
     )
     return {k: example[k] for k in keys if k in example and example[k] not in (None, "")}
@@ -433,8 +460,12 @@ def planner_projection(summary: dict) -> dict:
         "tone_performance": compact_group_for_planner(summary.get("tone_performance", {})),
         "lead_gender_performance": compact_group_for_planner(summary.get("lead_gender_performance", {})),
         "duration_performance": compact_group_for_planner(summary.get("duration_performance", {})),
+        "trend_performance": compact_group_for_planner(summary.get("trend_performance", {})),
         "top_examples": [compact_example_for_planner(x) for x in summary.get("top_examples", []) if isinstance(x, dict)],
     }
+    topics = compact_trend_topics_for_planner(summary.get("trend_topic_performance", {}))
+    if topics:
+        projection["trend_topic_performance"] = topics
     weak = [compact_example_for_planner(x) for x in summary.get("weak_retention_examples", []) if isinstance(x, dict)]
     if weak:
         projection["weak_retention_examples"] = weak
@@ -467,6 +498,8 @@ def build_summary(root: Path, current: dict) -> dict:
         "tone_performance": group_summary(rows, "story_tone"),
         "lead_gender_performance": group_summary(rows, "lead_gender"),
         "duration_performance": group_summary(rows, "duration_bucket"),
+        "trend_performance": group_summary(rows, "trend_lane"),
+        "trend_topic_performance": trend_topic_summary(rows),
         "top_examples": [compact_example(r) for r in top],
         "weak_retention_examples": [compact_example(r) for r in weak],
         "low_sample_categories": [{"category": c, "sample_size": counts[c]} for c in categories if counts[c] < 5],
