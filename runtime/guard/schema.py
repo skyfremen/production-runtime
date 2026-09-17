@@ -25,6 +25,21 @@ def instant(v,name):
     if value.tzinfo is None: raise ValueError(f"{name} must include timezone")
     return value
 
+def validate_trend_metadata(story):
+    has_aware="trend_aware" in story; has_topic="trend_topic" in story
+    if has_aware != has_topic:
+        raise ValueError("story trend metadata must contain both trend_aware and trend_topic or neither")
+    if not has_aware:
+        return
+    aware=story["trend_aware"]; topic=story["trend_topic"]
+    if type(aware) is not bool:
+        raise ValueError("story.trend_aware must be boolean")
+    if aware:
+        if not isinstance(topic,str) or not topic.strip():
+            raise ValueError("story.trend_topic must be non-empty when trend_aware is true")
+    elif topic is not None:
+        raise ValueError("story.trend_topic must be null when trend_aware is false")
+
 def validate_request_data(x):
     top={"request_version","content_id","source_draft_id","channel","story","narration","background","youtube","publication","visibility","render"}
     if not isinstance(x,dict) or set(x)!=top: raise ValueError("request must contain exactly the V2 top-level fields")
@@ -34,10 +49,11 @@ def validate_request_data(x):
     if x["channel"]!={"name":"Wacky Dramas","handle":"@WACKYDRAMAS"}: raise ValueError("invalid channel")
     s=x["story"]
     required_story={"category","premise","conflict","twist","hook","script","lead_gender","story_tone","card_emojis"}
-    allowed_story=required_story|{"punchline"}
+    allowed_story=required_story|{"punchline","trend_aware","trend_topic"}
     if not isinstance(s,dict) or not required_story<=set(s) or set(s)-allowed_story:
-        raise ValueError("story must contain the required V2 fields; punchline is optional")
+        raise ValueError("story must contain the required V2 fields; punchline and trend provenance are optional")
     for k in required_story-{"card_emojis"}: nonempty(s[k],"story."+k)
+    validate_trend_metadata(s)
     if not isinstance(s["card_emojis"],list) or not 4<=len(s["card_emojis"])<=6: raise ValueError("story.card_emojis must contain 4-6 entries")
     expected_voice=mapped_voice(str(s["lead_gender"]),str(s["story_tone"]))
     if x["narration"]!={"engine":"kokoro","voice":expected_voice,"speed":TTS_SPEED}: raise ValueError("invalid deterministic narration contract")
