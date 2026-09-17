@@ -16,7 +16,7 @@ def ok(condition,name):
 def sample_request():
     script_words=["word"]*360; payoff="the receipt proved everything"; script_words[200:205]=payoff.split()
     return {"request_version":2,"content_id":"wd-"+"a"*24,"source_draft_id":"draft-selftest01","channel":{"name":"Wacky Dramas","handle":"@WACKYDRAMAS"},
-      "story":{"category":"work","premise":"A coworker steals credit.","conflict":"The liar gets praised.","twist":"A timestamped receipt exists.","hook":"Everyone believed the wrong person.","script":" ".join(script_words),"lead_gender":"female","story_tone":"dramatic","punchline":payoff,"card_emojis":["😳","💬","🔥","👀"]},
+      "story":{"category":"work","premise":"A coworker steals credit.","conflict":"The liar gets praised.","twist":"A timestamped receipt exists.","hook":"Everyone believed the wrong person.","script":" ".join(script_words),"lead_gender":"female","story_tone":"dramatic","punchline":payoff,"card_emojis":["😳","💬","🔥","👀"],"trend_aware":True,"trend_topic":"GTA 6"},
       "narration":{"engine":"kokoro","voice":"af_bella","speed":1.75},
       "background":{"mode":"concatenated_fit_to_short","segments":[{"background_id":"a","segment_start_seconds":0.0,"segment_duration_seconds":60.0},{"background_id":"b","segment_start_seconds":0.0,"segment_duration_seconds":60.0},{"background_id":"c","segment_start_seconds":0.0,"segment_duration_seconds":60.0}]},
       "youtube":{"title":"The Receipt Changed Everything","description":"A workplace story.","hashtags":["#WackyDramas","#Shorts"],"tags":["Wacky Dramas","Shorts"],"category_id":"24","made_for_kids":False},
@@ -40,6 +40,16 @@ def main():
         if label=="missing": q["story"].pop("punchline")
         else: q["story"]["punchline"]=value
         validate_request_data(q); ok(True,f"{label} punchline is non-blocking")
+    legacy=json.loads(json.dumps(request)); legacy["story"].pop("trend_aware"); legacy["story"].pop("trend_topic"); validate_request_data(legacy); ok(True,"legacy request without trend provenance remains valid")
+    evergreen=json.loads(json.dumps(request)); evergreen["story"]["trend_aware"]=False; evergreen["story"]["trend_topic"]=None; validate_request_data(evergreen); ok(True,"evergreen trend provenance validates")
+    bad=json.loads(json.dumps(request)); bad["story"]["trend_aware"]=True; bad["story"]["trend_topic"]=None
+    try: validate_request_data(bad)
+    except ValueError: ok(True,"trend-aware request requires topic")
+    else: raise AssertionError("trend-aware request without topic must fail")
+    bad=json.loads(json.dumps(request)); bad["story"]["trend_aware"]=False; bad["story"]["trend_topic"]="GTA 6"
+    try: validate_request_data(bad)
+    except ValueError: ok(True,"evergreen request rejects topic")
+    else: raise AssertionError("evergreen request with topic must fail")
     words=[{"word":word,"start":i*.1,"end":(i+1)*.1} for i,word in enumerate("before the receipt proved everything after".split())]
     semantic=resolve_semantic_span(words,"the receipt proved everything"); ok(semantic["status"]=="matched" and semantic["punchline_indices"]==frozenset({1,2,3,4}),"v2 string punchline resolves")
     ok(contract_hash()=="db118b20737d06509071754851388e51af427b7930cd48708b3e427415fce1de","single compatibility hash"); validate_contract_hash(contract_hash())
