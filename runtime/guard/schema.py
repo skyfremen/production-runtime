@@ -8,6 +8,7 @@ MIN_BG=60.0; MAX_BG=100.0; MIN_TOTAL=180.0; MAX_TOTAL=300.0; TTS_SPEED=1.75
 NATURAL={"natural","neutral","conversational","warm","calm"}
 EXPRESSIVE={"expressive","dramatic","comedy","sarcastic","dramatic_comedy","absurd"}
 TONES=NATURAL|EXPRESSIVE
+HOOK_TYPES={"accusation","discovery","contradiction","money_stakes","social_exposure","urgency","confession","consequence_first"}
 
 def mapped_voice(g,t):
     if g not in {"female","male"}: raise ValueError("story.lead_gender must be female or male")
@@ -49,10 +50,12 @@ def validate_request_data(x):
     if x["channel"]!={"name":"Wacky Dramas","handle":"@WACKYDRAMAS"}: raise ValueError("invalid channel")
     s=x["story"]
     required_story={"category","premise","conflict","twist","hook","script","lead_gender","story_tone","card_emojis"}
-    allowed_story=required_story|{"punchline","trend_aware","trend_topic"}
+    allowed_story=required_story|{"punchline","hook_type","trend_aware","trend_topic"}
     if not isinstance(s,dict) or not required_story<=set(s) or set(s)-allowed_story:
-        raise ValueError("story must contain the required V2 fields; punchline and trend provenance are optional")
+        raise ValueError("story must contain the required V2 fields; punchline and creative provenance are optional")
     for k in required_story-{"card_emojis"}: nonempty(s[k],"story."+k)
+    if "hook_type" in s and s["hook_type"] not in HOOK_TYPES:
+        raise ValueError("story.hook_type must be a supported hook type")
     validate_trend_metadata(s)
     if not isinstance(s["card_emojis"],list) or not 4<=len(s["card_emojis"])<=6: raise ValueError("story.card_emojis must contain 4-6 entries")
     expected_voice=mapped_voice(str(s["lead_gender"]),str(s["story_tone"]))
