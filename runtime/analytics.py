@@ -224,11 +224,12 @@ def snapshot(root: Path) -> dict:
     rows = eligible_videos(root, creative, now)
     token = access_token()
     current = collect_data_api(rows, token)
-    detailed, detailed_ok, warning = collect_analytics_api(rows, token, now)
+    live_rows = [row for row in rows if row["youtube_video_id"] in current]
+    detailed, detailed_ok, warning = collect_analytics_api(live_rows, token, now)
     videos = []
-    for row in rows:
+    for row in live_rows:
         vid = row["youtube_video_id"]
-        base = current.get(vid, {})
+        base = current[vid]
         rich = detailed.get(vid, {})
         metrics = {
             "views": base.get("views"),
@@ -256,11 +257,21 @@ def snapshot(root: Path) -> dict:
 
 
 def all_snapshots(root: Path, current: dict) -> list[dict]:
+    live_cids = {
+        str(item.get("content_id", ""))
+        for item in current.get("videos", [])
+        if isinstance(item, dict) and CID_RE.fullmatch(str(item.get("content_id", "")))
+    }
     docs = []
     for path in sorted((root / "content" / "analytics" / "snapshots").glob("analytics-*.json")):
         try:
             d = read_json(path)
             if isinstance(d, dict) and isinstance(d.get("videos"), list):
+                d = dict(d)
+                d["videos"] = [
+                    item for item in d["videos"]
+                    if isinstance(item, dict) and str(item.get("content_id", "")) in live_cids
+                ]
                 docs.append(d)
         except Exception:
             pass
