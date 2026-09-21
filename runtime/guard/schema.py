@@ -50,12 +50,16 @@ def validate_request_data(x):
     if x["channel"]!={"name":"Wacky Dramas","handle":"@WACKYDRAMAS"}: raise ValueError("invalid channel")
     s=x["story"]
     required_story={"category","premise","conflict","twist","hook","script","lead_gender","story_tone","card_emojis"}
-    allowed_story=required_story|{"punchline","hook_type","trend_aware","trend_topic"}
+    allowed_story=required_story|{"punchline","hook_type","trend_aware","trend_topic","like_cta"}
     if not isinstance(s,dict) or not required_story<=set(s) or set(s)-allowed_story:
         raise ValueError("story must contain the required V2 fields; punchline and creative provenance are optional")
     for k in required_story-{"card_emojis"}: nonempty(s[k],"story."+k)
     if "hook_type" in s and s["hook_type"] not in HOOK_TYPES:
         raise ValueError("story.hook_type must be a supported hook type")
+    if "like_cta" in s:
+        like_cta=nonempty(s["like_cta"],"story.like_cta")
+        if len(like_cta)>80 or "\n" in like_cta or "\r" in like_cta:
+            raise ValueError("story.like_cta must be a single line of at most 80 characters")
     validate_trend_metadata(s)
     if not isinstance(s["card_emojis"],list) or not 4<=len(s["card_emojis"])<=6: raise ValueError("story.card_emojis must contain 4-6 entries")
     expected_voice=mapped_voice(str(s["lead_gender"]),str(s["story_tone"]))
