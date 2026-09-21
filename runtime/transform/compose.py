@@ -87,14 +87,14 @@ X264_PRESET = "superfast"
 X264_CRF = 19
 BLACKDETECT_FILTER = "blackdetect=d=0.50:pic_th=0.98:pix_th=0.10"
 BLACKDETECT_MAX_ALLOWED_SECONDS = 0.75
-LIKE_CTA_CENTER_Y = 235
-LIKE_CTA_MAX_WIDTH = 880
-LIKE_CTA_FONT_SIZE = 44
-LIKE_CTA_MIN_FONT_SIZE = 30
-LIKE_CTA_HEART_SIZE = 48
-LIKE_CTA_GAP = 14
-LIKE_CTA_PADDING_X = 26
-LIKE_CTA_PADDING_Y = 14
+LIKE_CTA_CENTER_Y = 400
+LIKE_CTA_MAX_WIDTH = 940
+LIKE_CTA_FONT_SIZE = 54
+LIKE_CTA_MIN_FONT_SIZE = 38
+LIKE_CTA_HEART_SIZE = 64
+LIKE_CTA_GAP = 18
+LIKE_CTA_PADDING_X = 34
+LIKE_CTA_PADDING_Y = 20
 LIKE_CTA_DURATION_SECONDS = 5.0
 LIKE_CTA_FADE_IN_SECONDS = 0.40
 LIKE_CTA_FADE_OUT_SECONDS = 0.50
@@ -383,19 +383,38 @@ def build_like_cta_overlay(text):
     y1 = int(LIKE_CTA_CENTER_Y - pill_height / 2)
     x2, y2 = x1 + pill_width, y1 + pill_height
 
+    outer_glow = 12
+    inner_glow = 6
+    draw.rounded_rectangle(
+        (x1 - outer_glow, y1 - outer_glow, x2 + outer_glow, y2 + outer_glow),
+        radius=(pill_height // 2) + outer_glow,
+        fill=(255, 214, 40, 40),
+    )
+    draw.rounded_rectangle(
+        (x1 - inner_glow, y1 - inner_glow, x2 + inner_glow, y2 + inner_glow),
+        radius=(pill_height // 2) + inner_glow,
+        fill=(255, 214, 40, 75),
+    )
     draw.rounded_rectangle(
         (x1, y1, x2, y2),
         radius=pill_height // 2,
-        fill=(0, 0, 0, 190),
-        outline=(255, 255, 255, 55),
-        width=2,
+        fill=(0, 0, 0, 220),
+        outline=(255, 214, 40, 220),
+        width=4,
     )
     heart_x = x1 + LIKE_CTA_PADDING_X
     heart_y = y1 + int((pill_height - heart.height) / 2)
     canvas.alpha_composite(heart, (heart_x, heart_y))
     text_x = heart_x + heart.width + LIKE_CTA_GAP
     text_y = y1 + (pill_height - text_height) / 2 - bb[1]
-    draw.text((text_x, text_y), label, font=chosen_font, fill=(255, 255, 255, 255))
+    draw.text(
+        (text_x, text_y),
+        label,
+        font=chosen_font,
+        fill=(255, 255, 255, 255),
+        stroke_width=2,
+        stroke_fill=(255, 214, 40, 210),
+    )
     return canvas
 
 def caption_events(text, tts_segments, speech_duration, start_offset=0.0):
