@@ -87,6 +87,17 @@ X264_PRESET = "superfast"
 X264_CRF = 19
 BLACKDETECT_FILTER = "blackdetect=d=0.50:pic_th=0.98:pix_th=0.10"
 BLACKDETECT_MAX_ALLOWED_SECONDS = 0.75
+LIKE_CTA_CENTER_Y = 175
+LIKE_CTA_MAX_WIDTH = 880
+LIKE_CTA_FONT_SIZE = 44
+LIKE_CTA_MIN_FONT_SIZE = 30
+LIKE_CTA_HEART_SIZE = 48
+LIKE_CTA_GAP = 14
+LIKE_CTA_PADDING_X = 26
+LIKE_CTA_PADDING_Y = 14
+LIKE_CTA_DURATION_SECONDS = 1.35
+LIKE_CTA_FADE_IN_SECONDS = 0.12
+LIKE_CTA_FADE_OUT_SECONDS = 0.18
 
 
 def run_capture(cmd):
@@ -342,6 +353,51 @@ def render_emoji(icon, target_size):
     raise RuntimeError(f"Unable to render requested card emoji: {icon}")
 
 
+
+def build_like_cta_overlay(text):
+    canvas = Image.new("RGBA", (VIDEO_WIDTH, VIDEO_HEIGHT), (0, 0, 0, 0))
+    label = str(text or "").strip()
+    if not label:
+        return canvas
+    label = label.upper()
+    draw = ImageDraw.Draw(canvas)
+
+    heart = render_emoji("❤️", LIKE_CTA_HEART_SIZE)
+    text_limit = LIKE_CTA_MAX_WIDTH - (2 * LIKE_CTA_PADDING_X) - heart.width - LIKE_CTA_GAP
+    chosen_font = None
+    for size in range(LIKE_CTA_FONT_SIZE, LIKE_CTA_MIN_FONT_SIZE - 1, -1):
+        candidate = font_px(FONT_BOLD, size)
+        if draw.textlength(label, font=candidate) <= text_limit:
+            chosen_font = candidate
+            break
+    if chosen_font is None:
+        raise ValueError("Like CTA cannot fit the top overlay safely")
+
+    bb = draw.textbbox((0, 0), label, font=chosen_font)
+    text_width = bb[2] - bb[0]
+    text_height = bb[3] - bb[1]
+    content_height = max(heart.height, text_height)
+    pill_width = int(2 * LIKE_CTA_PADDING_X + heart.width + LIKE_CTA_GAP + text_width)
+    pill_height = int(2 * LIKE_CTA_PADDING_Y + content_height)
+    x1 = int((VIDEO_WIDTH - pill_width) / 2)
+    y1 = int(LIKE_CTA_CENTER_Y - pill_height / 2)
+    x2, y2 = x1 + pill_width, y1 + pill_height
+
+    draw.rounded_rectangle(
+        (x1, y1, x2, y2),
+        radius=pill_height // 2,
+        fill=(0, 0, 0, 190),
+        outline=(255, 255, 255, 55),
+        width=2,
+    )
+    heart_x = x1 + LIKE_CTA_PADDING_X
+    heart_y = y1 + int((pill_height - heart.height) / 2)
+    canvas.alpha_composite(heart, (heart_x, heart_y))
+    text_x = heart_x + heart.width + LIKE_CTA_GAP
+    text_y = y1 + (pill_height - text_height) / 2 - bb[1]
+    draw.text((text_x, text_y), label, font=chosen_font, fill=(255, 255, 255, 255))
+    return canvas
+
 def caption_events(text, tts_segments, speech_duration, start_offset=0.0):
     events = []
     usable = [(t, n) for t, n in tts_segments if t and n > 0]
@@ -402,6 +458,7 @@ def main():
     narration_cfg = request["narration"]
     script = str(story["script"]).strip()
     hook = str(story["hook"]).strip()
+    like_cta = str(story.get("like_cta") or "").strip()
     channel_name = request["channel"]["name"]
     handle = request["channel"]["handle"]
     voice = narration_cfg["voice"]
@@ -583,6 +640,15 @@ def main():
             contrast_draw.line((0, y, W, y), fill=(0, 0, 0, alpha))
     contrast.save(contrast_path)
 
+    like_cta_path = OUTPUT_DIR / "like-cta.png"
+    build_like_cta_overlay(like_cta).save(like_cta_path)
+    like_cta_end = max(0.0, final_duration - 0.10)
+    like_cta_start = max(0.0, like_cta_end - LIKE_CTA_DURATION_SECONDS)
+    like_cta_fade_out = max(
+        like_cta_start + LIKE_CTA_FADE_IN_SECONDS,
+        like_cta_end - LIKE_CTA_FADE_OUT_SECONDS,
+    )
+
     events = caption_events(narration_text, tts_segments, story_duration, start_offset=story_start)
     ass = OUTPUT_DIR / "captions.ass"
     ass.write_text(build_ass_header() + "\n".join(events) + "\n", encoding="utf-8")
@@ -595,10 +661,13 @@ def main():
         f"crop={W}:{H},eq=brightness=-0.03:saturation=1.03[bg];"
         f"[1:v]format=rgba,fade=t=out:st={card_fade_start:.2f}:d={card_fade_dur:.2f}:alpha=1[card];"
         "[2:v]format=rgba[brand];[3:v]format=rgba[shade];"
+        f"[5:v]format=rgba,fade=t=in:st={like_cta_start:.3f}:d={LIKE_CTA_FADE_IN_SECONDS:.3f}:alpha=1,"
+        f"fade=t=out:st={like_cta_fade_out:.3f}:d={LIKE_CTA_FADE_OUT_SECONDS:.3f}:alpha=1[cta];"
         "[bg][shade]overlay=0:0[protected];"
         f"[protected][card]overlay=x=0:y='-{CARD_BOB_AMPLITUDE}*sin(PI*t/2)'[tmp1];"
         "[tmp1][brand]overlay=0:0[tmp2];"
-        f"[tmp2]subtitles='{ass.as_posix()}',"
+        "[tmp2][cta]overlay=0:0[tmp3];"
+        f"[tmp3]subtitles='{ass.as_posix()}',"
         f"setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709,"
         f"{BLACKDETECT_FILTER}[v]"
     )
@@ -609,6 +678,7 @@ def main():
         "-loop", "1", "-i", str(brand_path),
         "-loop", "1", "-i", str(contrast_path),
         "-i", str(narration),
+        "-loop", "1", "-i", str(like_cta_path),
         "-filter_complex", filter_complex,
         "-map", "[v]", "-map", "4:a:0",
         "-t", f"{final_duration:.3f}",
@@ -660,6 +730,10 @@ def main():
         "card_transition_seconds": CARD_TRANSITION_SECONDS,
         "story_start_seconds": round(story_start, 6),
         "story_narration_seconds": round(story_duration, 6),
+        "like_cta": like_cta or None,
+        "like_cta_heart": "❤️" if like_cta else None,
+        "like_cta_start_seconds": round(like_cta_start, 6) if like_cta else None,
+        "like_cta_end_seconds": round(like_cta_end, 6) if like_cta else None,
         "video_seconds": round(final_duration, 6),
         "resolution": f"{W}x{H}",
         "fps": fps,
