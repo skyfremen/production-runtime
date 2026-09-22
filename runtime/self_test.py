@@ -78,5 +78,6 @@ def main():
     result=(ROOT/"runtime/output/result.py").read_text().replace(" ",""); ok('"status":"scheduled"' in result and '"visibility":"private"' in result,"result requires verified schedule")
     verify=(ROOT/"runtime/output/verify.py").read_text(); ok("verified_scheduled" in verify and "publishAt differs" in verify,"remote publishAt verified")
     resolver=(ROOT/"runtime/resources/resolve.py").read_text(); ok(resolver.count("setsar=1")>=3,"background normalization forces square pixels"); ok("stream_loop" in (ROOT/"runtime/transform/process.py").read_text() and "loop_count" in resolver,"no-loop treatment is explicit")
+    compose=(ROOT/"runtime/transform/compose.py").read_text(); ok("LIKE_CTA_MAX_LINES = 2" in compose and "for split in range(1, len(words))" in compose and "LIKE_CTA_LINE_GAP" in compose,"like CTA has deterministic two-line fallback")
     print(f"SELF_TEST_PASS checks={checks}"); print("contract_hash="+contract_hash())
 if __name__=="__main__": main()
