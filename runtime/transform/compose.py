@@ -95,6 +95,8 @@ LIKE_CTA_HEART_SIZE = 64
 LIKE_CTA_GAP = 18
 LIKE_CTA_PADDING_X = 34
 LIKE_CTA_PADDING_Y = 20
+LIKE_CTA_MAX_LINES = 2
+LIKE_CTA_LINE_GAP = 6
 LIKE_CTA_DURATION_SECONDS = 5.0
 LIKE_CTA_FADE_IN_SECONDS = 0.40
 LIKE_CTA_FADE_OUT_SECONDS = 0.50
@@ -354,6 +356,30 @@ def render_emoji(icon, target_size):
 
 
 
+def fit_like_cta_text(draw, label, text_limit):
+    for size in range(LIKE_CTA_FONT_SIZE, LIKE_CTA_MIN_FONT_SIZE - 1, -1):
+        candidate = font_px(FONT_BOLD, size)
+        if draw.textlength(label, font=candidate) <= text_limit:
+            return [label], candidate
+
+    words = label.split()
+    if LIKE_CTA_MAX_LINES >= 2 and len(words) > 1:
+        for size in range(LIKE_CTA_FONT_SIZE, LIKE_CTA_MIN_FONT_SIZE - 1, -1):
+            candidate = font_px(FONT_BOLD, size)
+            choices = []
+            for split in range(1, len(words)):
+                lines = [" ".join(words[:split]), " ".join(words[split:])]
+                widths = [draw.textlength(line, font=candidate) for line in lines]
+                if max(widths) <= text_limit:
+                    score = max(widths) + abs(widths[0] - widths[1]) * 0.35
+                    choices.append((score, lines))
+            if choices:
+                choices.sort(key=lambda item: item[0])
+                return choices[0][1], candidate
+
+    raise ValueError("Like CTA cannot fit the top overlay safely")
+
+
 def build_like_cta_overlay(text):
     canvas = Image.new("RGBA", (VIDEO_WIDTH, VIDEO_HEIGHT), (0, 0, 0, 0))
     label = str(text or "").strip()
@@ -364,18 +390,14 @@ def build_like_cta_overlay(text):
 
     heart = render_emoji("❤️", LIKE_CTA_HEART_SIZE)
     text_limit = LIKE_CTA_MAX_WIDTH - (2 * LIKE_CTA_PADDING_X) - heart.width - LIKE_CTA_GAP
-    chosen_font = None
-    for size in range(LIKE_CTA_FONT_SIZE, LIKE_CTA_MIN_FONT_SIZE - 1, -1):
-        candidate = font_px(FONT_BOLD, size)
-        if draw.textlength(label, font=candidate) <= text_limit:
-            chosen_font = candidate
-            break
-    if chosen_font is None:
-        raise ValueError("Like CTA cannot fit the top overlay safely")
+    lines, chosen_font = fit_like_cta_text(draw, label, text_limit)
 
-    bb = draw.textbbox((0, 0), label, font=chosen_font)
-    text_width = bb[2] - bb[0]
-    text_height = bb[3] - bb[1]
+    metrics = []
+    for line in lines:
+        bb = draw.textbbox((0, 0), line, font=chosen_font)
+        metrics.append((line, bb, bb[2] - bb[0], bb[3] - bb[1]))
+    text_width = max(width for _, _, width, _ in metrics)
+    text_height = sum(height for _, _, _, height in metrics) + LIKE_CTA_LINE_GAP * (len(metrics) - 1)
     content_height = max(heart.height, text_height)
     pill_width = int(2 * LIKE_CTA_PADDING_X + heart.width + LIKE_CTA_GAP + text_width)
     pill_height = int(2 * LIKE_CTA_PADDING_Y + content_height)
@@ -402,19 +424,24 @@ def build_like_cta_overlay(text):
         outline=(255, 214, 40, 220),
         width=4,
     )
+
     heart_x = x1 + LIKE_CTA_PADDING_X
     heart_y = y1 + int((pill_height - heart.height) / 2)
     canvas.alpha_composite(heart, (heart_x, heart_y))
+
     text_x = heart_x + heart.width + LIKE_CTA_GAP
-    text_y = y1 + (pill_height - text_height) / 2 - bb[1]
-    draw.text(
-        (text_x, text_y),
-        label,
-        font=chosen_font,
-        fill=(255, 255, 255, 255),
-        stroke_width=2,
-        stroke_fill=(255, 214, 40, 210),
-    )
+    line_y = y1 + (pill_height - text_height) / 2
+    for line, bb, line_width, line_height in metrics:
+        line_x = text_x + (text_width - line_width) / 2
+        draw.text(
+            (line_x, line_y - bb[1]),
+            line,
+            font=chosen_font,
+            fill=(255, 255, 255, 255),
+            stroke_width=2,
+            stroke_fill=(255, 214, 40, 210),
+        )
+        line_y += line_height + LIKE_CTA_LINE_GAP
     return canvas
 
 def caption_events(text, tts_segments, speech_duration, start_offset=0.0):
