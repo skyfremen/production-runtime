@@ -157,7 +157,7 @@ def collect_distribution_breakdowns(token: str, now: datetime) -> tuple[dict, li
         rows = sorted(rows, key=lambda item: item.get("views", 0), reverse=True)
         total = sum(metric_int(item.get("views")) for item in rows)
         top = []
-        for item in rows[:10]:
+        for item in rows[:5]:
             view_count = metric_int(item.get("views"))
             top.append({
                 label: item.get(label),
@@ -520,8 +520,7 @@ def compact_group_for_planner(group: dict) -> dict:
             if sample > 0 and median is not None:
                 item[f"views_{label}"] = {"sample": sample, "median": median}
         mature = int(metrics.get("mature_sample", 0) or 0)
-        engaged_sample = int(metrics.get("mature_engaged_sample", 0) or 0)
-        if mature > 0 or engaged_sample > 0:
+        if mature > 0:
             mature_data = {"sample": mature}
             for source, target in (
                 ("median_average_view_percentage", "average_view_percentage"),
@@ -530,11 +529,22 @@ def compact_group_for_planner(group: dict) -> dict:
             ):
                 if metrics.get(source) is not None:
                     mature_data[target] = metrics[source]
-            if engaged_sample > 0 and metrics.get("median_engaged_views_per_view_percentage") is not None:
-                mature_data["engaged_view_sample"] = engaged_sample
-                mature_data["engaged_views_per_view_percentage"] = metrics["median_engaged_views_per_view_percentage"]
             item["mature"] = mature_data
         out[name] = item
+    return out
+
+
+def compact_publish_time_for_planner(group: dict) -> dict:
+    out = compact_group_for_planner(group)
+    for name, metrics in (group or {}).items():
+        if name not in out or not isinstance(metrics, dict):
+            continue
+        engaged_sample = int(metrics.get("mature_engaged_sample", 0) or 0)
+        engaged_value = metrics.get("median_engaged_views_per_view_percentage")
+        if engaged_sample > 0 and engaged_value is not None:
+            mature = out[name].setdefault("mature", {"sample": int(metrics.get("mature_sample", 0) or 0)})
+            mature["engaged_view_sample"] = engaged_sample
+            mature["engaged_views_per_view_percentage"] = engaged_value
     return out
 
 
@@ -594,7 +604,7 @@ def planner_projection(summary: dict) -> dict:
         "duration_performance": compact_group_for_planner(summary.get("duration_performance", {})),
         "hook_type_performance": compact_group_for_planner(summary.get("hook_type_performance", {})),
         "trend_performance": compact_group_for_planner(summary.get("trend_performance", {})),
-        "publish_time_performance_sgt": compact_group_for_planner(summary.get("publish_time_performance_sgt", {})),
+        "publish_time_performance_sgt": compact_publish_time_for_planner(summary.get("publish_time_performance_sgt", {})),
         "distribution_breakdowns": summary.get("distribution_breakdowns", {}),
         "top_examples": [compact_example_for_planner(x) for x in summary.get("top_examples", []) if isinstance(x, dict)],
     }
