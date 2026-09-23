@@ -16,9 +16,12 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 WINDOW_DAYS = 30
+ANALYTICS_VERSION = 2
+SGT = timezone(timedelta(hours=8))
 CID_RE = re.compile(r"^wd-[0-9a-f]{24}$")
 VIDEO_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 ANALYTICS_METRICS = "views,engagedViews,averageViewDuration,averageViewPercentage,likes,comments,shares,subscribersGained"
+BREAKDOWN_METRICS = "views,engagedViews"
 HOOK_TYPES = {"accusation", "discovery", "contradiction", "money_stakes", "social_exposure", "urgency", "confession", "consequence_first"}
 
 
@@ -90,6 +93,84 @@ def youtube_data(path: str, params: dict, token: str):
 
 def analytics_report(params: dict, token: str):
     return get_json("https://youtubeanalytics.googleapis.com/v2/reports?" + urlencode(params), token)
+
+
+def report_rows(report: dict) -> list[dict]:
+    headers = [str(h.get("name")) for h in report.get("columnHeaders", [])]
+    return [dict(zip(headers, values)) for values in report.get("rows", []) or []]
+
+
+def metric_int(value) -> int:
+    try:
+        return int(float(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def collect_distribution_breakdowns(token: str, now: datetime) -> tuple[dict, list[str]]:
+    """Collect compact Shorts-only geography and traffic-source diagnostics.
+
+    These are deliberately best-effort so an optional breakdown never blocks
+    the existing per-video analytics pipeline.
+    """
+    start = (now - timedelta(days=WINDOW_DAYS)).date().isoformat()
+    end = now.date().isoformat()
+    warnings: list[str] = []
+
+    def query(dimensions: str, max_results: int) -> list[dict]:
+        try:
+            return report_rows(analytics_report({
+                "ids": "channel==MINE",
+                "startDate": start,
+                "endDate": end,
+                "metrics": BREAKDOWN_METRICS,
+                "dimensions": dimensions,
+                "sort": "-views",
+                "maxResults": max_results,
+            }, token))
+        except (HTTPError, URLError, TimeoutError) as exc:
+            code = f" HTTP {exc.code}" if isinstance(exc, HTTPError) else ""
+            warnings.append(f"Optional analytics breakdown {dimensions} unavailable:{code} {type(exc).__name__}")
+            return []
+
+    geography = []
+    for row in query("country,creatorContentType", 250):
+        if str(row.get("creatorContentType", "")).upper() != "SHORTS":
+            continue
+        geography.append({
+            "country": str(row.get("country", "ZZ")),
+            "views": metric_int(row.get("views")),
+            "engaged_views": metric_int(row.get("engagedViews")),
+        })
+
+    traffic_sources = []
+    for row in query("insightTrafficSourceType,creatorContentType", 100):
+        if str(row.get("creatorContentType", "")).upper() != "SHORTS":
+            continue
+        traffic_sources.append({
+            "source": str(row.get("insightTrafficSourceType", "UNKNOWN")),
+            "views": metric_int(row.get("views")),
+            "engaged_views": metric_int(row.get("engagedViews")),
+        })
+
+    def compact(rows: list[dict], label: str) -> dict:
+        rows = sorted(rows, key=lambda item: item.get("views", 0), reverse=True)
+        total = sum(metric_int(item.get("views")) for item in rows)
+        top = []
+        for item in rows[:10]:
+            view_count = metric_int(item.get("views"))
+            top.append({
+                label: item.get(label),
+                "views": view_count,
+                "engaged_views": metric_int(item.get("engaged_views")),
+                "view_share_percentage": round((view_count / total) * 100, 2) if total else 0.0,
+            })
+        return {"views_total": total, "top": top}
+
+    return {
+        "geography": compact(geography, "country"),
+        "traffic_sources": compact(traffic_sources, "source"),
+    }, warnings
 
 
 def duration_seconds(value: str) -> float | None:
@@ -226,6 +307,7 @@ def snapshot(root: Path) -> dict:
     current = collect_data_api(rows, token)
     live_rows = [row for row in rows if row["youtube_video_id"] in current]
     detailed, detailed_ok, warning = collect_analytics_api(live_rows, token, now)
+    distribution_breakdowns, breakdown_warnings = collect_distribution_breakdowns(token, now)
     videos = []
     for row in live_rows:
         vid = row["youtube_video_id"]
@@ -246,12 +328,14 @@ def snapshot(root: Path) -> dict:
             "duration_seconds": base.get("duration_seconds"),
             "metrics": metrics,
         })
+    warnings = [item for item in [warning, *breakdown_warnings] if item]
     return {
-        "analytics_version": 1,
+        "analytics_version": ANALYTICS_VERSION,
         "collected_at": iso_z(now),
         "window_days": WINDOW_DAYS,
         "detailed_analytics_available": detailed_ok,
-        "warning": warning,
+        "distribution_breakdowns": distribution_breakdowns,
+        "warning": "; ".join(warnings) if warnings else None,
         "videos": videos,
     }
 
@@ -307,6 +391,15 @@ def duration_bucket(seconds):
     return "over_178"
 
 
+def publish_time_bucket_sgt(value) -> str:
+    try:
+        hour = parse_dt(str(value)).astimezone(SGT).hour
+    except Exception:
+        return "unknown"
+    start = (hour // 4) * 4
+    return f"{start:02d}-{start + 3:02d}"
+
+
 def performance_rows(snapshots: list[dict]) -> list[dict]:
     by_cid: dict[str, list[dict]] = {}
     for snap in snapshots:
@@ -324,6 +417,17 @@ def performance_rows(snapshots: list[dict]) -> list[dict]:
         p7d = closest_checkpoint(obs, 168, tolerance=12)
         creative = latest.get("creative") or {}
         lm = latest.get("metrics") or {}
+        latest_age = float(latest.get("age_hours", 0) or 0)
+        latest_views = lm.get("views")
+        latest_engaged = lm.get("engaged_views")
+        engaged_views_per_view_percentage = None
+        if (
+            latest_age >= 72
+            and isinstance(latest_views, (int, float))
+            and float(latest_views) > 0
+            and isinstance(latest_engaged, (int, float))
+        ):
+            engaged_views_per_view_percentage = round((float(latest_engaged) / float(latest_views)) * 100, 2)
         aware = creative.get("trend_aware")
         trend_lane = "trend_aware" if aware is True else "evergreen" if aware is False else "untracked"
         hook_type = creative.get("hook_type") if creative.get("hook_type") in HOOK_TYPES else "untracked"
@@ -340,13 +444,15 @@ def performance_rows(snapshots: list[dict]) -> list[dict]:
             "trend_topic": creative.get("trend_topic") if trend_lane == "trend_aware" else None,
             "duration_bucket": duration_bucket(latest.get("duration_seconds")),
             "duration_seconds": latest.get("duration_seconds"),
+            "publish_time_bucket_sgt": publish_time_bucket_sgt(latest.get("publish_at")),
             "views_6h": (p6.get("metrics") or {}).get("views") if p6 else None,
             "views_24h": (p24.get("metrics") or {}).get("views") if p24 else None,
             "views_72h": (p72.get("metrics") or {}).get("views") if p72 else None,
             "views_7d": (p7d.get("metrics") or {}).get("views") if p7d else None,
-            "retention": lm.get("average_view_percentage") if float(latest.get("age_hours", 0)) >= 72 else None,
-            "subscribers_gained": lm.get("subscribers_gained") if float(latest.get("age_hours", 0)) >= 72 else None,
-            "shares": lm.get("shares") if float(latest.get("age_hours", 0)) >= 72 else None,
+            "retention": lm.get("average_view_percentage") if latest_age >= 72 else None,
+            "engaged_views_per_view_percentage": engaged_views_per_view_percentage,
+            "subscribers_gained": lm.get("subscribers_gained") if latest_age >= 72 else None,
+            "shares": lm.get("shares") if latest_age >= 72 else None,
         })
     return out
 
@@ -369,6 +475,8 @@ def group_summary(rows: list[dict], key: str) -> dict:
             "median_views_7d": med([v.get("views_7d") for v in items]),
             "mature_sample": sum(v.get("retention") is not None for v in items),
             "median_average_view_percentage": med([v.get("retention") for v in items]),
+            "mature_engaged_sample": sum(v.get("engaged_views_per_view_percentage") is not None for v in items),
+            "median_engaged_views_per_view_percentage": med([v.get("engaged_views_per_view_percentage") for v in items]),
             "median_subscribers_gained": med([v.get("subscribers_gained") for v in items]),
             "median_shares": med([v.get("shares") for v in items]),
         }
@@ -412,7 +520,8 @@ def compact_group_for_planner(group: dict) -> dict:
             if sample > 0 and median is not None:
                 item[f"views_{label}"] = {"sample": sample, "median": median}
         mature = int(metrics.get("mature_sample", 0) or 0)
-        if mature > 0:
+        engaged_sample = int(metrics.get("mature_engaged_sample", 0) or 0)
+        if mature > 0 or engaged_sample > 0:
             mature_data = {"sample": mature}
             for source, target in (
                 ("median_average_view_percentage", "average_view_percentage"),
@@ -421,6 +530,9 @@ def compact_group_for_planner(group: dict) -> dict:
             ):
                 if metrics.get(source) is not None:
                     mature_data[target] = metrics[source]
+            if engaged_sample > 0 and metrics.get("median_engaged_views_per_view_percentage") is not None:
+                mature_data["engaged_view_sample"] = engaged_sample
+                mature_data["engaged_views_per_view_percentage"] = metrics["median_engaged_views_per_view_percentage"]
             item["mature"] = mature_data
         out[name] = item
     return out
@@ -470,7 +582,7 @@ def learning_summary(rows: list[dict]) -> dict:
 
 def planner_projection(summary: dict) -> dict:
     projection = {
-        "analytics_version": summary.get("analytics_version", 1),
+        "analytics_version": summary.get("analytics_version", ANALYTICS_VERSION),
         "generated_at": summary.get("generated_at"),
         "window_days": summary.get("window_days"),
         "videos_analyzed": summary.get("videos_analyzed", 0),
@@ -482,6 +594,8 @@ def planner_projection(summary: dict) -> dict:
         "duration_performance": compact_group_for_planner(summary.get("duration_performance", {})),
         "hook_type_performance": compact_group_for_planner(summary.get("hook_type_performance", {})),
         "trend_performance": compact_group_for_planner(summary.get("trend_performance", {})),
+        "publish_time_performance_sgt": compact_group_for_planner(summary.get("publish_time_performance_sgt", {})),
+        "distribution_breakdowns": summary.get("distribution_breakdowns", {}),
         "top_examples": [compact_example_for_planner(x) for x in summary.get("top_examples", []) if isinstance(x, dict)],
     }
     topics = compact_trend_topics_for_planner(summary.get("trend_topic_performance", {}))
@@ -509,7 +623,7 @@ def build_summary(root: Path, current: dict) -> dict:
     categories = sorted({r.get("category", "unknown") for r in rows if r.get("category")})
     counts = {c: sum(r.get("category") == c for r in rows) for c in categories}
     summary = {
-        "analytics_version": 1,
+        "analytics_version": ANALYTICS_VERSION,
         "generated_at": current["collected_at"],
         "window_days": WINDOW_DAYS,
         "videos_analyzed": len(rows),
@@ -522,6 +636,8 @@ def build_summary(root: Path, current: dict) -> dict:
         "hook_type_performance": group_summary(rows, "hook_type"),
         "trend_performance": group_summary(rows, "trend_lane"),
         "trend_topic_performance": trend_topic_summary(rows),
+        "publish_time_performance_sgt": group_summary(rows, "publish_time_bucket_sgt"),
+        "distribution_breakdowns": current.get("distribution_breakdowns", {}),
         "top_examples": [compact_example(r) for r in top],
         "weak_retention_examples": [compact_example(r) for r in weak],
         "low_sample_categories": [{"category": c, "sample_size": counts[c]} for c in categories if counts[c] < 5],
