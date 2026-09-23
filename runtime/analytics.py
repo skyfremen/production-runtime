@@ -663,8 +663,8 @@ def patch_context(root: Path, summary: dict) -> None:
     context["context_version"] = max(int(context.get("context_version", 1)), 2)
     context["analytics_summary"] = summary
     raw = json.dumps(context, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
-    if len(raw.encode()) > 60000:
-        raise RuntimeError("Planner context exceeds 60000 bytes after analytics summary")
+    if len(raw.encode()) > 80000:
+        raise RuntimeError("Planner context exceeds 80000 bytes after analytics summary")
     path.write_text(raw, encoding="utf-8")
 
 
