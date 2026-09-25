@@ -85,7 +85,7 @@ def validate_request_data(x):
     p=x["publication"]
     if not isinstance(p,dict) or set(p)!={"mode","publish_at"} or p.get("mode")!="scheduled": raise ValueError("invalid scheduled publication contract")
     scheduled=instant(p.get("publish_at"),"publication.publish_at")
-    if scheduled.minute or scheduled.second or scheduled.microsecond: raise ValueError("publication.publish_at must be a whole-hour slot")
+    if scheduled.minute not in {0,20,40} or scheduled.second or scheduled.microsecond: raise ValueError("publication.publish_at must be on minute 00, 20, or 40")
     if x["visibility"]!="private": raise ValueError("V2 visibility must be private before scheduled publication")
     expected={"width":1080,"height":1920,"fps":30,"video_codec":"h264","h264_profile":"high","pixel_format":"yuv420p",
               "audio_codec":"aac","audio_sample_rate":48000,"background_music":False}
