@@ -1,9 +1,17 @@
 import unittest
+from unittest.mock import patch
+from urllib.error import HTTPError
 
 import analytics_remote
 
 
 class AnalyticsRemoteScopeTests(unittest.TestCase):
+    def test_ref_update_422_is_retryable_concurrency_conflict(self):
+        repo = analytics_remote.GitHubRepository("owner/repo", "token", "planner")
+        with patch("analytics_remote.urlopen", side_effect=HTTPError("url", 422, "race", {}, None)):
+            with self.assertRaises(analytics_remote.RefAdvanced):
+                repo.request("git/refs/heads/main", "PATCH", {"sha": "a" * 40, "force": False})
+
     def test_planner_write_scope_is_exact(self):
         for path in (
             "content/analytics-summary.json",

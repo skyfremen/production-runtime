@@ -50,6 +50,17 @@ class CheckpointTests(unittest.TestCase):
 
 
 class OptionalAnalyticsTests(unittest.TestCase):
+    def test_missing_data_api_counters_remain_null(self):
+        original = analytics.youtube_data
+        analytics.youtube_data = lambda *_args: {"items": [{"id": "aaaaaaaaaaa", "statistics": {}, "contentDetails": {}}]}
+        try:
+            result = analytics.collect_data_api([{"youtube_video_id": "aaaaaaaaaaa"}], "token")
+        finally:
+            analytics.youtube_data = original
+        self.assertIsNone(result["aaaaaaaaaaa"]["views"])
+        self.assertIsNone(result["aaaaaaaaaaa"]["likes"])
+        self.assertIsNone(result["aaaaaaaaaaa"]["comments"])
+
     def test_core_analytics_rejection_falls_back_to_data_api_metrics(self):
         def rejected(_params, _token):
             raise RuntimeError("unsupported combination")
@@ -117,6 +128,17 @@ class OptionalAnalyticsTests(unittest.TestCase):
 
 
 class DerivedArtifactTests(unittest.TestCase):
+    def test_supported_patterns_require_mature_checkpoint_sample_threshold(self):
+        summary = {
+            "generated_at": "2026-09-26T12:00:00Z",
+            "learning": {"minimum_pattern_sample": 12, "stage": "established", "analytics_weight": "normal"},
+            "category_performance": {
+                "work": {"sample_size": 12, "sample_7d": 4, "median_views_7d": 900, "sample_72h": 12, "median_views_72h": 700},
+            },
+        }
+        patterns = analytics.planner_projection(summary)["creative_signals"]["supported_patterns"]
+        self.assertEqual(patterns[0]["evidence_median_views"], 700)
+
     def test_legacy_distribution_breakdowns_survive_v3_summary_backfill(self):
         current = {
             "distribution_breakdowns": {

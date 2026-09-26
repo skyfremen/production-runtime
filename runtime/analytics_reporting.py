@@ -98,8 +98,10 @@ def sync_reporting(
 
     try:
         live_jobs = paged(api_json, "jobs?pageSize=100", "jobs")
+        jobs_list_succeeded = True
     except Exception as exc:
         live_jobs = []
+        jobs_list_succeeded = False
         warnings.append(f"Reporting API jobs list unavailable: {type(exc).__name__}")
     by_type = {
         str(item.get("reportTypeId")): item
@@ -112,6 +114,8 @@ def sync_reporting(
 
     for report_type_id, report_type in sorted(report_types.items()):
         if report_type_id in by_type:
+            continue
+        if not jobs_list_succeeded:
             continue
         if report_type.get("systemManaged") is True:
             warnings.append(f"System-managed report {report_type_id} has no listed job yet")

@@ -64,6 +64,9 @@ def collect_retention(
                 "dimensions": "elapsedVideoTimeRatio",
                 "filters": f"video=={video_id}",
             })
+            if not (report.get("rows") or []):
+                warnings.append(f"Optional retention {video_id}/{checkpoint} returned an empty curve; will retry")
+                continue
             path = warehouse_root / "retention" / video_id / f"{checkpoint}.json"
             payload = {
                 "analytics_version": 3,

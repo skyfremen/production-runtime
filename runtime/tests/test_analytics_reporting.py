@@ -54,6 +54,24 @@ class FakeReportingApi:
 
 
 class ReportingSyncTests(unittest.TestCase):
+    def test_jobs_list_failure_does_not_create_possibly_duplicate_jobs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            api = FakeReportingApi()
+            original = api.json
+
+            def fail_jobs(method, path, body=None):
+                if path == "jobs?pageSize=100":
+                    raise RuntimeError("temporary list failure")
+                return original(method, path, body)
+
+            result = sync_reporting(
+                "token", Path(tmp), {"jobs": {}}, {"downloaded_reports": {}},
+                fail_jobs, api.bytes, datetime(2026, 9, 26, tzinfo=timezone.utc),
+            )
+
+            self.assertEqual(api.created, [])
+            self.assertTrue(any("jobs list unavailable" in warning for warning in result.warnings))
+
     def test_discovers_relevant_types_reuses_jobs_and_creates_only_missing_job(self):
         with tempfile.TemporaryDirectory() as tmp:
             api = FakeReportingApi()

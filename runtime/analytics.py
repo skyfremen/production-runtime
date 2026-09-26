@@ -301,6 +301,13 @@ def eligible_videos(root: Path, creative: dict[str, dict], now: datetime) -> lis
 
 
 def collect_data_api(rows: list[dict], token: str) -> dict[str, dict]:
+    def counter(stats: dict, key: str):
+        value = stats.get(key)
+        try:
+            return int(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
     out: dict[str, dict] = {}
     for batch in chunks([r["youtube_video_id"] for r in rows], 50):
         data = youtube_data("videos", {"part": "statistics,contentDetails,snippet,status", "id": ",".join(batch), "maxResults": 50}, token)
@@ -311,9 +318,9 @@ def collect_data_api(rows: list[dict], token: str) -> dict[str, dict]:
             snippet = item.get("snippet") or {}
             status = item.get("status") or {}
             out[vid] = {
-                "views": int(stats.get("viewCount", 0) or 0),
-                "likes": int(stats.get("likeCount", 0) or 0),
-                "comments": int(stats.get("commentCount", 0) or 0),
+                "views": counter(stats, "viewCount"),
+                "likes": counter(stats, "likeCount"),
+                "comments": counter(stats, "commentCount"),
                 "duration_seconds": duration_seconds(details.get("duration")),
                 "youtube_published_at": snippet.get("publishedAt"),
                 "privacy_status": status.get("privacyStatus"),
@@ -706,9 +713,10 @@ def planner_projection(summary: dict) -> dict:
         for value, metrics in (summary.get(key) or {}).items():
             if not isinstance(metrics, dict) or int(metrics.get("sample_size", 0) or 0) < minimum:
                 continue
-            score = next((metrics.get(name) for name in (
-                "median_views_7d", "median_views_72h", "median_views_24h", "median_views_6h"
-            ) if metrics.get(name) is not None), None)
+            score = next((metrics.get(median_key) for median_key, sample_key in (
+                ("median_views_7d", "sample_7d"), ("median_views_72h", "sample_72h"),
+                ("median_views_24h", "sample_24h"), ("median_views_6h", "sample_6h"),
+            ) if metrics.get(median_key) is not None and int(metrics.get(sample_key, 0) or 0) >= minimum), None)
             if score is None:
                 continue
             patterns.append({
@@ -725,7 +733,10 @@ def planner_projection(summary: dict) -> dict:
     for name, metrics in (summary.get("publish_time_performance_sgt") or {}).items():
         if not isinstance(metrics, dict) or int(metrics.get("sample_size", 0) or 0) < minimum:
             continue
-        score = next((metrics.get(key) for key in ("median_views_72h", "median_views_24h", "median_views_6h") if metrics.get(key) is not None), None)
+        score = next((metrics.get(median_key) for median_key, sample_key in (
+            ("median_views_72h", "sample_72h"), ("median_views_24h", "sample_24h"),
+            ("median_views_6h", "sample_6h"),
+        ) if metrics.get(median_key) is not None and int(metrics.get(sample_key, 0) or 0) >= minimum), None)
         if score is not None:
             windows.append({"window": name, "sample_size": metrics["sample_size"], "evidence_median_views": score})
     windows.sort(key=lambda item: (-float(item["evidence_median_views"]), item["window"]))

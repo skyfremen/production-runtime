@@ -71,6 +71,19 @@ class RetentionTests(unittest.TestCase):
             self.assertTrue(result.warnings)
             self.assertEqual(state["retention_checkpoints"], {})
 
+    def test_empty_curve_warns_and_remains_due_for_retry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = {"retention_checkpoints": {}}
+            result = collect_retention(
+                [{"youtube_video_id": "aaaaaaaaaaa", "age_hours": 72}],
+                state, Path(tmp), lambda _params: {"columnHeaders": [], "rows": []},
+                datetime(2026, 9, 26, tzinfo=timezone.utc),
+            )
+
+            self.assertEqual(result.files, [])
+            self.assertTrue(any("empty" in warning for warning in result.warnings))
+            self.assertEqual(state["retention_checkpoints"], {})
+
 
 if __name__ == "__main__":
     unittest.main()

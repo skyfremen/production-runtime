@@ -81,6 +81,8 @@ class GitHubRepository:
             with urlopen(req, timeout=60) as response:
                 return json.load(response)
         except HTTPError as exc:
+            if method == "PATCH" and path == "git/refs/heads/main" and exc.code == 422:
+                raise RefAdvanced(f"{self.role} main advanced during ref update") from None
             raise RemoteError(f"{self.role} GitHub API {method} {path} failed HTTP {exc.code}") from None
         except (URLError, TimeoutError) as exc:
             raise RemoteError(f"{self.role} GitHub API {method} {path} network failure: {type(exc).__name__}") from None
