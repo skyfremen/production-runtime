@@ -147,6 +147,33 @@ class DerivedArtifactTests(unittest.TestCase):
             "realtime/2026-09-26/analytics-20260926T120000Z.json",
         )
 
+    def test_index_advertises_targeted_datasets_stored_in_realtime_snapshot(self):
+        snapshot = {
+            "analytics_reports": {
+                "traffic_source": {"rows": []},
+                "playback_location": {"rows": []},
+                "device_os": {"rows": []},
+                "demographics": {"rows": []},
+            },
+            "videos": [],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "realtime" / "2026-09-26" / "analytics-20260926T120000Z.json"
+            path.parent.mkdir(parents=True)
+            path.write_text(json.dumps(snapshot), encoding="utf-8")
+
+            index = analytics.build_analytics_index(
+                root, {"generated_at": "2026-09-26T12:00:00Z"}, [],
+            )
+
+        self.assertTrue(index["available_datasets"]["basic"])
+        self.assertTrue(index["available_datasets"]["traffic_source"])
+        self.assertTrue(index["available_datasets"]["playback_location"])
+        self.assertTrue(index["available_datasets"]["device_os"])
+        self.assertTrue(index["available_datasets"]["demographics"])
+        self.assertFalse(index["available_datasets"]["reach"])
+
     def test_planner_projection_and_index_bound_warning_lists(self):
         warnings = [f"warning {i}" for i in range(20)]
         summary = {

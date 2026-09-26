@@ -945,6 +945,14 @@ def build_summary(root: Path, current: dict) -> dict:
 def build_analytics_index(root: Path, summary: dict, warnings: list[str]) -> dict:
     latest_snapshots = list((root / "realtime").glob("*/*.json"))
     latest_snapshot = max(latest_snapshots, key=lambda path: path.name, default=None)
+    targeted_reports = {}
+    if latest_snapshot:
+        try:
+            candidate = read_json(latest_snapshot).get("analytics_reports")
+            if isinstance(candidate, dict):
+                targeted_reports = candidate
+        except (OSError, json.JSONDecodeError, AttributeError):
+            pass
     metadata_files = sorted((root / "raw").glob("**/*.metadata.json"))
     latest_reporting_date = None
     for path in metadata_files:
@@ -962,11 +970,11 @@ def build_analytics_index(root: Path, summary: dict, warnings: list[str]) -> dic
         "generated_at": summary.get("generated_at"),
         "available_datasets": {
             "realtime": bool(latest_snapshots),
-            "basic": exists("raw/basic/**/*.csv"),
-            "traffic_source": exists("raw/traffic-source/**/*.csv"),
-            "playback_location": exists("raw/playback-location/**/*.csv"),
-            "device_os": exists("raw/device-os/**/*.csv"),
-            "demographics": exists("raw/demographics/**/*.csv"),
+            "basic": bool(latest_snapshots) or exists("raw/basic/**/*.csv"),
+            "traffic_source": "traffic_source" in targeted_reports or exists("raw/traffic-source/**/*.csv"),
+            "playback_location": "playback_location" in targeted_reports or exists("raw/playback-location/**/*.csv"),
+            "device_os": "device_os" in targeted_reports or exists("raw/device-os/**/*.csv"),
+            "demographics": "demographics" in targeted_reports or exists("raw/demographics/**/*.csv"),
             "reach": exists("raw/reach-basic/**/*.csv") or exists("raw/reach-combined/**/*.csv"),
             "combined": exists("raw/combined/**/*.csv"),
             "retention": exists("retention/*/*.json"),
