@@ -18,6 +18,7 @@ jobs:
     env:
       PRIVATE_STATE_REPOSITORY: ${{ secrets.PRIVATE_STATE_REPOSITORY }}
       PRIVATE_STATE_TOKEN: ${{ secrets.PRIVATE_STATE_TOKEN }}
+      ANALYTICS_DATA_REPOSITORY: skyfremen/youtube-analytics-data
       RUNTIME_AUTH_A: ${{ secrets.RUNTIME_AUTH_A }}
       RUNTIME_AUTH_B: ${{ secrets.RUNTIME_AUTH_B }}
       RUNTIME_AUTH_C: ${{ secrets.RUNTIME_AUTH_C }}

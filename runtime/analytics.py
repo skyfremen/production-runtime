@@ -7,22 +7,45 @@ import json
 import math
 import os
 import re
+import shutil
 import statistics
+import subprocess
 import sys
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 
+from analytics_reporting import sync_reporting
+from analytics_retention import collect_retention
+
 WINDOW_DAYS = 30
-ANALYTICS_VERSION = 2
+ANALYTICS_VERSION = 3
 SGT = timezone(timedelta(hours=8))
 CID_RE = re.compile(r"^wd-[0-9a-f]{24}$")
 VIDEO_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
-ANALYTICS_METRICS = "views,engagedViews,averageViewDuration,averageViewPercentage,likes,comments,shares,subscribersGained"
-BREAKDOWN_METRICS = "views,engagedViews"
+ANALYTICS_METRICS = "views,engagedViews,estimatedMinutesWatched,averageViewDuration,averageViewPercentage,likes,comments,shares,subscribersGained"
+OPTIONAL_VIDEO_METRICS = ("dislikes", "subscribersLost", "videosAddedToPlaylists", "videosRemovedFromPlaylists")
 HOOK_TYPES = {"accusation", "discovery", "contradiction", "money_stakes", "social_exposure", "urgency", "confession", "consequence_first"}
+OPTIONAL_ANALYTICS_REPORTS = {
+    "geography": ("country,creatorContentType", "views,engagedViews,estimatedMinutesWatched,averageViewDuration,averageViewPercentage", 250),
+    "traffic_source": ("insightTrafficSourceType,creatorContentType", "views,engagedViews,estimatedMinutesWatched", 100),
+    "playback_location": ("insightPlaybackLocationType,creatorContentType", "views,engagedViews,estimatedMinutesWatched", 100),
+    "device_os": ("deviceType,operatingSystem,creatorContentType", "views,engagedViews,estimatedMinutesWatched", 250),
+    "subscriber_status": ("subscribedStatus,creatorContentType", "views,engagedViews,estimatedMinutesWatched,averageViewDuration,averageViewPercentage,likes,dislikes,shares", 100),
+    "demographics": ("ageGroup,gender,creatorContentType", "viewerPercentage", 100),
+    "sharing": ("sharingService,creatorContentType", "shares", 100),
+    "creator_content_type": ("creatorContentType", "views,engagedViews,estimatedMinutesWatched,averageViewDuration,averageViewPercentage", 20),
+}
+
+
+@dataclass
+class AnalyticsOutputs:
+    planner_files: list[Path]
+    warehouse_files: list[Path]
+    warnings: list[str]
 
 
 def now_utc() -> datetime:
@@ -95,6 +118,33 @@ def analytics_report(params: dict, token: str):
     return get_json("https://youtubeanalytics.googleapis.com/v2/reports?" + urlencode(params), token)
 
 
+def reporting_json(method: str, path: str, token: str, body=None):
+    data = json.dumps(body, separators=(",", ":")).encode() if body is not None else None
+    req = Request(
+        "https://youtubereporting.googleapis.com/v1/" + path,
+        data=data,
+        method=method,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        },
+    )
+    with urlopen(req, timeout=60) as response:
+        return json.load(response)
+
+
+def reporting_bytes(url: str, token: str) -> bytes:
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").casefold()
+    trusted = any(host == suffix or host.endswith("." + suffix) for suffix in ("googleapis.com", "googleusercontent.com"))
+    if parsed.scheme != "https" or not trusted:
+        raise RuntimeError("Reporting download URL host is not trusted")
+    req = Request(url, headers={"Authorization": f"Bearer {token}", "Accept": "text/csv"})
+    with urlopen(req, timeout=120) as response:
+        return response.read()
+
+
 def report_rows(report: dict) -> list[dict]:
     headers = [str(h.get("name")) for h in report.get("columnHeaders", [])]
     return [dict(zip(headers, values)) for values in report.get("rows", []) or []]
@@ -107,70 +157,70 @@ def metric_int(value) -> int:
         return 0
 
 
-def collect_distribution_breakdowns(token: str, now: datetime) -> tuple[dict, list[str]]:
-    """Collect compact Shorts-only geography and traffic-source diagnostics.
-
-    These are deliberately best-effort so an optional breakdown never blocks
-    the existing per-video analytics pipeline.
-    """
+def collect_optional_analytics_reports(token: str, now: datetime, report_fn=analytics_report) -> tuple[dict, list[str]]:
     start = (now - timedelta(days=WINDOW_DAYS)).date().isoformat()
     end = now.date().isoformat()
-    warnings: list[str] = []
-
-    def query(dimensions: str, max_results: int) -> list[dict]:
+    reports = {}
+    warnings = []
+    for name, (dimensions, metrics, maximum) in OPTIONAL_ANALYTICS_REPORTS.items():
         try:
-            return report_rows(analytics_report({
+            params = {
                 "ids": "channel==MINE",
                 "startDate": start,
                 "endDate": end,
-                "metrics": BREAKDOWN_METRICS,
+                "metrics": metrics,
                 "dimensions": dimensions,
-                "sort": "-views",
-                "maxResults": max_results,
-            }, token))
-        except (HTTPError, URLError, TimeoutError) as exc:
-            code = f" HTTP {exc.code}" if isinstance(exc, HTTPError) else ""
-            warnings.append(f"Optional analytics breakdown {dimensions} unavailable:{code} {type(exc).__name__}")
-            return []
+                "maxResults": maximum,
+            }
+            if "views" in metrics:
+                params["sort"] = "-views"
+            report = report_fn(params, token)
+            reports[name] = {
+                "dimensions": dimensions.split(","),
+                "metrics": metrics.split(","),
+                "rows": report_rows(report),
+            }
+        except Exception as exc:
+            warnings.append(f"Optional YouTube Analytics report {name} unavailable: {type(exc).__name__}")
+    return reports, warnings
 
-    geography = []
-    for row in query("country,creatorContentType", 250):
-        if str(row.get("creatorContentType", "")).upper() != "SHORTS":
-            continue
-        geography.append({
-            "country": str(row.get("country", "ZZ")),
-            "views": metric_int(row.get("views")),
-            "engaged_views": metric_int(row.get("engagedViews")),
-        })
 
-    traffic_sources = []
-    for row in query("insightTrafficSourceType,creatorContentType", 100):
-        if str(row.get("creatorContentType", "")).upper() != "SHORTS":
-            continue
-        traffic_sources.append({
-            "source": str(row.get("insightTrafficSourceType", "UNKNOWN")),
-            "views": metric_int(row.get("views")),
-            "engaged_views": metric_int(row.get("engagedViews")),
-        })
-
-    def compact(rows: list[dict], label: str) -> dict:
-        rows = sorted(rows, key=lambda item: item.get("views", 0), reverse=True)
-        total = sum(metric_int(item.get("views")) for item in rows)
-        top = []
-        for item in rows[:5]:
-            view_count = metric_int(item.get("views"))
-            top.append({
-                label: item.get(label),
-                "views": view_count,
-                "engaged_views": metric_int(item.get("engaged_views")),
-                "view_share_percentage": round((view_count / total) * 100, 2) if total else 0.0,
-            })
-        return {"views_total": total, "top": top}
-
-    return {
-        "geography": compact(geography, "country"),
-        "traffic_sources": compact(traffic_sources, "source"),
-    }, warnings
+def collect_per_video_traffic_sources(
+    rows: list[dict], token: str, now: datetime, report_fn=analytics_report
+) -> tuple[dict[str, dict], list[str]]:
+    if not rows:
+        return {}, []
+    start = (now - timedelta(days=WINDOW_DAYS)).date().isoformat()
+    end = now.date().isoformat()
+    output: dict[str, dict] = {}
+    warnings = []
+    for batch_rows in chunks(rows, 200):
+        ids = [str(item["youtube_video_id"]) for item in batch_rows]
+        try:
+            report = report_fn({
+                "ids": "channel==MINE",
+                "startDate": start,
+                "endDate": end,
+                "metrics": "views,engagedViews,estimatedMinutesWatched",
+                "dimensions": "video,insightTrafficSourceType",
+                "filters": "video==" + ",".join(ids),
+                "maxResults": len(ids) * 20,
+            }, token)
+            for item in report_rows(report):
+                if str(item.get("insightTrafficSourceType", "")).upper() != "SHORTS":
+                    continue
+                video_id = str(item.get("video") or "")
+                views = metric_int(item.get("views"))
+                engaged = metric_int(item.get("engagedViews"))
+                output[video_id] = {
+                    "shorts_source_views": views,
+                    "shorts_source_engaged_views": engaged,
+                    "shorts_source_engaged_view_rate_percentage": round((engaged / views) * 100, 2) if views else None,
+                    "shorts_source_estimated_minutes_watched": item.get("estimatedMinutesWatched"),
+                }
+        except Exception as exc:
+            warnings.append(f"Optional per-video Shorts traffic unavailable: {type(exc).__name__}")
+    return output, warnings
 
 
 def duration_seconds(value: str) -> float | None:
@@ -253,26 +303,31 @@ def eligible_videos(root: Path, creative: dict[str, dict], now: datetime) -> lis
 def collect_data_api(rows: list[dict], token: str) -> dict[str, dict]:
     out: dict[str, dict] = {}
     for batch in chunks([r["youtube_video_id"] for r in rows], 50):
-        data = youtube_data("videos", {"part": "statistics,contentDetails", "id": ",".join(batch), "maxResults": 50}, token)
+        data = youtube_data("videos", {"part": "statistics,contentDetails,snippet,status", "id": ",".join(batch), "maxResults": 50}, token)
         for item in data.get("items", []):
             vid = str(item.get("id", ""))
             stats = item.get("statistics") or {}
             details = item.get("contentDetails") or {}
+            snippet = item.get("snippet") or {}
+            status = item.get("status") or {}
             out[vid] = {
                 "views": int(stats.get("viewCount", 0) or 0),
                 "likes": int(stats.get("likeCount", 0) or 0),
                 "comments": int(stats.get("commentCount", 0) or 0),
                 "duration_seconds": duration_seconds(details.get("duration")),
+                "youtube_published_at": snippet.get("publishedAt"),
+                "privacy_status": status.get("privacyStatus"),
             }
     return out
 
 
-def collect_analytics_api(rows: list[dict], token: str, now: datetime) -> tuple[dict[str, dict], bool, str | None]:
+def collect_analytics_api(rows: list[dict], token: str, now: datetime) -> tuple[dict[str, dict], bool, list[str]]:
     if not rows:
-        return {}, True, None
+        return {}, True, []
     out: dict[str, dict] = {}
     start = (now - timedelta(days=WINDOW_DAYS)).date().isoformat()
     end = now.date().isoformat()
+    warnings = []
     try:
         for batch_rows in chunks(rows, 200):
             ids = [r["youtube_video_id"] for r in batch_rows]
@@ -292,22 +347,41 @@ def collect_analytics_api(rows: list[dict], token: str, now: datetime) -> tuple[
                 vid = str(row.pop("video", ""))
                 if vid:
                     out[vid] = row
-        return out, True, None
-    except HTTPError as exc:
-        if exc.code in {401, 403}:
-            return {}, False, "OAuth token lacks YouTube Analytics read access; current Data API metrics were still collected."
-        raise
+    except Exception as exc:
+        detail = "OAuth token lacks YouTube Analytics read access" if isinstance(exc, HTTPError) and exc.code in {401, 403} else "YouTube Analytics per-video report unavailable"
+        return {}, False, [f"{detail}; current Data API metrics were still collected ({type(exc).__name__})."]
+    for metric in OPTIONAL_VIDEO_METRICS:
+        try:
+            for batch_rows in chunks(rows, 200):
+                ids = [r["youtube_video_id"] for r in batch_rows]
+                report = analytics_report({
+                    "ids": "channel==MINE",
+                    "startDate": start,
+                    "endDate": end,
+                    "metrics": metric,
+                    "dimensions": "video",
+                    "filters": "video==" + ",".join(ids),
+                    "maxResults": len(ids),
+                }, token)
+                for item in report_rows(report):
+                    video_id = str(item.get("video") or "")
+                    if video_id:
+                        out.setdefault(video_id, {})[metric] = item.get(metric)
+        except Exception as exc:
+            warnings.append(f"Optional video metric {metric} unavailable: {type(exc).__name__}")
+    return out, True, warnings
 
 
-def snapshot(root: Path) -> dict:
-    now = now_utc()
+def snapshot(root: Path, token: str | None = None, now: datetime | None = None) -> dict:
+    now = now or now_utc()
     creative = load_creative_map(root)
     rows = eligible_videos(root, creative, now)
-    token = access_token()
+    token = token or access_token()
     current = collect_data_api(rows, token)
     live_rows = [row for row in rows if row["youtube_video_id"] in current]
-    detailed, detailed_ok, warning = collect_analytics_api(live_rows, token, now)
-    distribution_breakdowns, breakdown_warnings = collect_distribution_breakdowns(token, now)
+    detailed, detailed_ok, detailed_warnings = collect_analytics_api(live_rows, token, now)
+    analytics_reports, report_warnings = collect_optional_analytics_reports(token, now)
+    per_video_traffic, traffic_warnings = collect_per_video_traffic_sources(live_rows, token, now)
     videos = []
     for row in live_rows:
         vid = row["youtube_video_id"]
@@ -320,22 +394,28 @@ def snapshot(root: Path) -> dict:
             "engaged_views": rich.get("engagedViews"),
             "average_view_duration": rich.get("averageViewDuration"),
             "average_view_percentage": rich.get("averageViewPercentage"),
+            "estimated_minutes_watched": rich.get("estimatedMinutesWatched"),
+            "dislikes": rich.get("dislikes"),
             "shares": rich.get("shares"),
             "subscribers_gained": rich.get("subscribersGained"),
+            "subscribers_lost": rich.get("subscribersLost"),
+            "videos_added_to_playlists": rich.get("videosAddedToPlaylists"),
+            "videos_removed_from_playlists": rich.get("videosRemovedFromPlaylists"),
+            **per_video_traffic.get(vid, {}),
         }
         videos.append({
             **row,
             "duration_seconds": base.get("duration_seconds"),
             "metrics": metrics,
         })
-    warnings = [item for item in [warning, *breakdown_warnings] if item]
+    warnings = [*detailed_warnings, *report_warnings, *traffic_warnings]
     return {
         "analytics_version": ANALYTICS_VERSION,
         "collected_at": iso_z(now),
         "window_days": WINDOW_DAYS,
         "detailed_analytics_available": detailed_ok,
-        "distribution_breakdowns": distribution_breakdowns,
-        "warning": "; ".join(warnings) if warnings else None,
+        "analytics_reports": analytics_reports,
+        "warnings": warnings,
         "videos": videos,
     }
 
@@ -347,7 +427,8 @@ def all_snapshots(root: Path, current: dict) -> list[dict]:
         if isinstance(item, dict) and CID_RE.fullmatch(str(item.get("content_id", "")))
     }
     docs = []
-    for path in sorted((root / "content" / "analytics" / "snapshots").glob("analytics-*.json")):
+    paths = list((root / "realtime").glob("*/*.json")) + list((root / "realtime" / "legacy").glob("analytics-*.json"))
+    for path in sorted(set(paths)):
         try:
             d = read_json(path)
             if isinstance(d, dict) and isinstance(d.get("videos"), list):
@@ -359,7 +440,8 @@ def all_snapshots(root: Path, current: dict) -> list[dict]:
                 docs.append(d)
         except Exception:
             pass
-    docs.append(current)
+    if not any(doc.get("collected_at") == current.get("collected_at") for doc in docs):
+        docs.append(current)
     return docs
 
 
@@ -380,15 +462,15 @@ def med(values):
 def duration_bucket(seconds):
     if not isinstance(seconds, (int, float)):
         return "unknown"
-    if seconds < 120:
-        return "under_120"
-    if seconds < 140:
-        return "120_139"
-    if seconds < 160:
-        return "140_159"
-    if seconds <= 178:
-        return "160_178"
-    return "over_178"
+    if seconds < 45:
+        return "under_45"
+    if seconds < 55:
+        return "45_54"
+    if seconds < 65:
+        return "55_64"
+    if seconds < 75:
+        return "65_74"
+    return "75_plus"
 
 
 def publish_time_bucket_sgt(value) -> str:
@@ -398,6 +480,21 @@ def publish_time_bucket_sgt(value) -> str:
         return "unknown"
     start = (hour // 4) * 4
     return f"{start:02d}-{start + 3:02d}"
+
+
+def publish_hour_sgt(value) -> str:
+    try:
+        return f"{parse_dt(str(value)).astimezone(SGT).hour:02d}"
+    except Exception:
+        return "unknown"
+
+
+def publish_slot_sgt(value) -> str:
+    try:
+        local = parse_dt(str(value)).astimezone(SGT)
+        return f"{local.hour:02d}:{local.minute:02d}"
+    except Exception:
+        return "unknown"
 
 
 def performance_rows(snapshots: list[dict]) -> list[dict]:
@@ -411,10 +508,11 @@ def performance_rows(snapshots: list[dict]) -> list[dict]:
     for cid, obs in by_cid.items():
         obs.sort(key=lambda x: float(x.get("age_hours", 0)))
         latest = obs[-1]
-        p6 = closest_checkpoint(obs, 6, tolerance=4)
+        p2 = closest_checkpoint(obs, 2, tolerance=1.5)
+        p6 = closest_checkpoint(obs, 6, tolerance=3)
         p24 = closest_checkpoint(obs, 24)
-        p72 = closest_checkpoint(obs, 72)
-        p7d = closest_checkpoint(obs, 168, tolerance=12)
+        p72 = closest_checkpoint(obs, 72, tolerance=12)
+        p7d = closest_checkpoint(obs, 168, tolerance=24)
         creative = latest.get("creative") or {}
         lm = latest.get("metrics") or {}
         latest_age = float(latest.get("age_hours", 0) or 0)
@@ -431,6 +529,18 @@ def performance_rows(snapshots: list[dict]) -> list[dict]:
         aware = creative.get("trend_aware")
         trend_lane = "trend_aware" if aware is True else "evergreen" if aware is False else "untracked"
         hook_type = creative.get("hook_type") if creative.get("hook_type") in HOOK_TYPES else "untracked"
+        shorts_views = lm.get("shorts_source_views")
+        shorts_engaged = lm.get("shorts_source_engaged_views")
+        shorts_rate = lm.get("shorts_source_engaged_view_rate_percentage")
+        if shorts_rate is None and isinstance(shorts_views, (int, float)) and shorts_views > 0 and isinstance(shorts_engaged, (int, float)):
+            shorts_rate = round((float(shorts_engaged) / float(shorts_views)) * 100, 2)
+        checkpoints = {}
+        for label, observation in (("2h", p2), ("6h", p6), ("24h", p24), ("72h", p72), ("7d", p7d)):
+            if observation:
+                checkpoints[label] = {
+                    "actual_age_hours": float(observation.get("age_hours", 0)),
+                    "views": (observation.get("metrics") or {}).get("views"),
+                }
         out.append({
             "content_id": cid,
             "title": creative.get("title", ""),
@@ -444,15 +554,23 @@ def performance_rows(snapshots: list[dict]) -> list[dict]:
             "trend_topic": creative.get("trend_topic") if trend_lane == "trend_aware" else None,
             "duration_bucket": duration_bucket(latest.get("duration_seconds")),
             "duration_seconds": latest.get("duration_seconds"),
+            "publish_at": latest.get("publish_at"),
             "publish_time_bucket_sgt": publish_time_bucket_sgt(latest.get("publish_at")),
+            "publish_hour_sgt": publish_hour_sgt(latest.get("publish_at")),
+            "publish_slot_sgt": publish_slot_sgt(latest.get("publish_at")),
+            "views_2h": (p2.get("metrics") or {}).get("views") if p2 else None,
             "views_6h": (p6.get("metrics") or {}).get("views") if p6 else None,
             "views_24h": (p24.get("metrics") or {}).get("views") if p24 else None,
             "views_72h": (p72.get("metrics") or {}).get("views") if p72 else None,
             "views_7d": (p7d.get("metrics") or {}).get("views") if p7d else None,
             "retention": lm.get("average_view_percentage") if latest_age >= 72 else None,
             "engaged_views_per_view_percentage": engaged_views_per_view_percentage,
+            "shorts_source_views": shorts_views,
+            "shorts_source_engaged_views": shorts_engaged,
+            "shorts_source_engaged_view_rate_percentage": shorts_rate,
             "subscribers_gained": lm.get("subscribers_gained") if latest_age >= 72 else None,
             "shares": lm.get("shares") if latest_age >= 72 else None,
+            "checkpoint_observations": checkpoints,
         })
     return out
 
@@ -465,6 +583,8 @@ def group_summary(rows: list[dict], key: str) -> dict:
     for name, items in sorted(groups.items()):
         out[name] = {
             "sample_size": len(items),
+            "sample_2h": sum(v.get("views_2h") is not None for v in items),
+            "median_views_2h": med([v.get("views_2h") for v in items]),
             "sample_6h": sum(v.get("views_6h") is not None for v in items),
             "median_views_6h": med([v.get("views_6h") for v in items]),
             "sample_24h": sum(v.get("views_24h") is not None for v in items),
@@ -488,6 +608,41 @@ def trend_topic_summary(rows: list[dict]) -> dict:
     return group_summary(tracked, "trend_topic")
 
 
+def publication_spacing_summary(rows: list[dict]) -> dict:
+    ordered = []
+    for row in rows:
+        try:
+            ordered.append((parse_dt(str(row.get("publish_at"))), row))
+        except Exception:
+            continue
+    ordered.sort(key=lambda item: item[0])
+    comparable = []
+    exact_counts: dict[str, int] = {}
+    for (previous_at, _), (published_at, row) in zip(ordered, ordered[1:]):
+        gap = round((published_at - previous_at).total_seconds() / 60, 2)
+        if gap < 0:
+            continue
+        item = dict(row)
+        if gap <= 20:
+            bucket = "20m_or_less"
+        elif gap <= 40:
+            bucket = "21_40m"
+        elif gap <= 60:
+            bucket = "41_60m"
+        else:
+            bucket = "over_60m"
+        item["prior_publish_gap_bucket"] = bucket
+        comparable.append(item)
+        exact = str(int(gap)) if gap.is_integer() else str(gap)
+        exact_counts[exact] = exact_counts.get(exact, 0) + 1
+    return {
+        "timezone": "Asia/Singapore",
+        "interpretation": "observational evidence only; publication spacing is not changed automatically",
+        "bucket_performance": group_summary(comparable, "prior_publish_gap_bucket"),
+        "exact_gap_minute_samples": dict(sorted(exact_counts.items(), key=lambda pair: float(pair[0]))),
+    }
+
+
 def compact_example(row: dict) -> dict:
     return {
         "content_id": row["content_id"],
@@ -500,73 +655,20 @@ def compact_example(row: dict) -> dict:
         "trend_lane": row.get("trend_lane", "untracked"),
         "trend_topic": row.get("trend_topic"),
         "duration_seconds": row.get("duration_seconds"),
+        "views_2h": row.get("views_2h"),
         "views_6h": row.get("views_6h"),
         "views_24h": row.get("views_24h"),
         "views_72h": row.get("views_72h"),
         "views_7d": row.get("views_7d"),
         "average_view_percentage": row.get("retention"),
+        "shorts_source_views": row.get("shorts_source_views"),
+        "shorts_source_engaged_view_rate_percentage": row.get("shorts_source_engaged_view_rate_percentage"),
+        "checkpoint_observations": row.get("checkpoint_observations", {}),
     }
 
 
-def compact_group_for_planner(group: dict) -> dict:
-    out = {}
-    for name, metrics in sorted((group or {}).items()):
-        if not isinstance(metrics, dict):
-            continue
-        item = {"sample_size": int(metrics.get("sample_size", 0) or 0)}
-        for label in ("6h", "24h", "72h", "7d"):
-            sample = int(metrics.get(f"sample_{label}", 0) or 0)
-            median = metrics.get(f"median_views_{label}")
-            if sample > 0 and median is not None:
-                item[f"views_{label}"] = {"sample": sample, "median": median}
-        mature = int(metrics.get("mature_sample", 0) or 0)
-        if mature > 0:
-            mature_data = {"sample": mature}
-            for source, target in (
-                ("median_average_view_percentage", "average_view_percentage"),
-                ("median_subscribers_gained", "subscribers_gained"),
-                ("median_shares", "shares"),
-            ):
-                if metrics.get(source) is not None:
-                    mature_data[target] = metrics[source]
-            item["mature"] = mature_data
-        out[name] = item
-    return out
-
-
-def compact_publish_time_for_planner(group: dict) -> dict:
-    out = compact_group_for_planner(group)
-    for name, metrics in (group or {}).items():
-        if name not in out or not isinstance(metrics, dict):
-            continue
-        engaged_sample = int(metrics.get("mature_engaged_sample", 0) or 0)
-        engaged_value = metrics.get("median_engaged_views_per_view_percentage")
-        if engaged_sample > 0 and engaged_value is not None:
-            mature = out[name].setdefault("mature", {"sample": int(metrics.get("mature_sample", 0) or 0)})
-            mature["engaged_view_sample"] = engaged_sample
-            mature["engaged_views_per_view_percentage"] = engaged_value
-    return out
-
-
-def compact_trend_topics_for_planner(group: dict, limit: int = 20) -> dict:
-    eligible = [
-        (name, metrics)
-        for name, metrics in (group or {}).items()
-        if isinstance(metrics, dict) and int(metrics.get("sample_size", 0) or 0) >= 2
-    ]
-    eligible.sort(key=lambda pair: (-int(pair[1].get("sample_size", 0) or 0), pair[0].casefold(), pair[0]))
-    return compact_group_for_planner(dict(eligible[:limit]))
-
-
-def compact_example_for_planner(example: dict) -> dict:
-    keys = (
-        "content_id", "title", "premise", "category", "story_tone", "hook", "hook_type", "trend_lane", "trend_topic",
-        "duration_seconds", "views_6h", "views_24h", "views_72h", "views_7d", "average_view_percentage",
-    )
-    return {k: example[k] for k in keys if k in example and example[k] not in (None, "")}
-
-
 def learning_summary(rows: list[dict]) -> dict:
+    sample_2h = sum(r.get("views_2h") is not None for r in rows)
     sample_6h = sum(r.get("views_6h") is not None for r in rows)
     sample_24h = sum(r.get("views_24h") is not None for r in rows)
     sample_72h = sum(r.get("views_72h") is not None for r in rows)
@@ -582,6 +684,7 @@ def learning_summary(rows: list[dict]) -> dict:
         "analytics_weight": weight,
         "minimum_pattern_sample": minimum,
         "checkpoint_samples": {
+            "2h": sample_2h,
             "6h": sample_6h,
             "24h": sample_24h,
             "72h": sample_72h,
@@ -591,41 +694,191 @@ def learning_summary(rows: list[dict]) -> dict:
 
 
 def planner_projection(summary: dict) -> dict:
+    learning = summary.get("learning", {})
+    minimum = int(learning.get("minimum_pattern_sample", 12) or 12)
+    patterns = []
+    for dimension, key in (
+        ("category", "category_performance"),
+        ("hook_type", "hook_type_performance"),
+        ("story_tone", "tone_performance"),
+        ("trend_lane", "trend_performance"),
+    ):
+        for value, metrics in (summary.get(key) or {}).items():
+            if not isinstance(metrics, dict) or int(metrics.get("sample_size", 0) or 0) < minimum:
+                continue
+            score = next((metrics.get(name) for name in (
+                "median_views_7d", "median_views_72h", "median_views_24h", "median_views_6h"
+            ) if metrics.get(name) is not None), None)
+            if score is None:
+                continue
+            patterns.append({
+                "dimension": dimension,
+                "value": value,
+                "sample_size": int(metrics.get("sample_size", 0) or 0),
+                "mature_sample": int(metrics.get("mature_sample", 0) or 0),
+                "evidence_median_views": score,
+                "average_view_percentage": metrics.get("median_average_view_percentage"),
+            })
+    patterns.sort(key=lambda item: (-float(item["evidence_median_views"]), item["dimension"], item["value"]))
+
+    windows = []
+    for name, metrics in (summary.get("publish_time_performance_sgt") or {}).items():
+        if not isinstance(metrics, dict) or int(metrics.get("sample_size", 0) or 0) < minimum:
+            continue
+        score = next((metrics.get(key) for key in ("median_views_72h", "median_views_24h", "median_views_6h") if metrics.get(key) is not None), None)
+        if score is not None:
+            windows.append({"window": name, "sample_size": metrics["sample_size"], "evidence_median_views": score})
+    windows.sort(key=lambda item: (-float(item["evidence_median_views"]), item["window"]))
+
+    geography = (summary.get("geography_analysis") or {}).get("top", [])[:5]
+    traffic = (summary.get("traffic_source_analysis") or {}).get("top", [])[:5]
     projection = {
-        "analytics_version": summary.get("analytics_version", ANALYTICS_VERSION),
+        "analytics_version": ANALYTICS_VERSION,
         "generated_at": summary.get("generated_at"),
-        "window_days": summary.get("window_days"),
-        "videos_analyzed": summary.get("videos_analyzed", 0),
-        "detailed_analytics_available": bool(summary.get("detailed_analytics_available")),
-        "learning": summary.get("learning", {}),
-        "category_performance": compact_group_for_planner(summary.get("category_performance", {})),
-        "tone_performance": compact_group_for_planner(summary.get("tone_performance", {})),
-        "lead_gender_performance": compact_group_for_planner(summary.get("lead_gender_performance", {})),
-        "duration_performance": compact_group_for_planner(summary.get("duration_performance", {})),
-        "hook_type_performance": compact_group_for_planner(summary.get("hook_type_performance", {})),
-        "trend_performance": compact_group_for_planner(summary.get("trend_performance", {})),
-        "publish_time_performance_sgt": compact_publish_time_for_planner(summary.get("publish_time_performance_sgt", {})),
-        "distribution_breakdowns": summary.get("distribution_breakdowns", {}),
-        "top_examples": [compact_example_for_planner(x) for x in summary.get("top_examples", []) if isinstance(x, dict)],
+        "learning": learning,
+        "creative_signals": {
+            "soft_evidence_only": True,
+            "supported_patterns": patterns[:6],
+            "weak_patterns": list(reversed(patterns[-4:])) if len(patterns) > 4 else [],
+        },
+        "distribution_signals": {
+            "strong_publish_windows_sgt": windows[:3],
+            "weak_publish_windows_sgt": list(reversed(windows[-2:])) if len(windows) > 3 else [],
+        },
+        "audience_signals": {
+            "dominant_countries": geography,
+            "dominant_traffic_sources": traffic,
+        },
+        "data_freshness": {
+            "latest_realtime_snapshot": summary.get("generated_at"),
+            "videos_analyzed": summary.get("videos_analyzed", 0),
+        },
+        "warnings": list(summary.get("warnings") or [])[:5],
     }
-    topics = compact_trend_topics_for_planner(summary.get("trend_topic_performance", {}))
-    if topics:
-        projection["trend_topic_performance"] = topics
-    weak = [compact_example_for_planner(x) for x in summary.get("weak_retention_examples", []) if isinstance(x, dict)]
-    if weak:
-        projection["weak_retention_examples"] = weak
+    if len((json.dumps(projection, ensure_ascii=False, sort_keys=True) + "\n").encode()) > 16000:
+        projection["creative_signals"]["supported_patterns"] = projection["creative_signals"]["supported_patterns"][:3]
+        projection["creative_signals"]["weak_patterns"] = projection["creative_signals"]["weak_patterns"][:2]
+        projection["warnings"] = projection["warnings"][:2]
     return projection
+
+
+def report_analysis(current: dict, report_name: str, dimension_keys: tuple[str, ...], limit: int = 50) -> dict:
+    report = (current.get("analytics_reports") or {}).get(report_name) or {}
+    rows = []
+    for row in report.get("rows", []):
+        if str(row.get("creatorContentType", "SHORTS")).upper() != "SHORTS":
+            continue
+        item = {key: row.get(key) for key in dimension_keys if row.get(key) is not None}
+        for source, target in (
+            ("views", "views"), ("engagedViews", "engaged_views"),
+            ("estimatedMinutesWatched", "estimated_minutes_watched"),
+            ("averageViewDuration", "average_view_duration"),
+            ("averageViewPercentage", "average_view_percentage"),
+            ("viewerPercentage", "viewer_percentage"), ("shares", "shares"),
+            ("likes", "likes"), ("dislikes", "dislikes"),
+        ):
+            if row.get(source) is not None:
+                item[target] = row[source]
+        views = metric_int(row.get("views"))
+        engaged = metric_int(row.get("engagedViews"))
+        if views:
+            item["engaged_view_rate_percentage"] = round((engaged / views) * 100, 2)
+        rows.append(item)
+    rows.sort(key=lambda item: (-float(item.get("views", item.get("viewer_percentage", item.get("shares", 0))) or 0), json.dumps(item, sort_keys=True)))
+    total = sum(metric_int(item.get("views")) for item in rows)
+    for item in rows:
+        if total and item.get("views") is not None:
+            item["view_share_percentage"] = round((metric_int(item["views"]) / total) * 100, 2)
+    return {"sample_rows": len(rows), "views_total": total, "top": rows[:limit]}
+
+
+def retention_pattern_summary(root: Path) -> dict:
+    curves = []
+    for path in sorted((root / "retention").glob("*/*.json")):
+        try:
+            payload = read_json(path)
+            headers = [str(item.get("name")) for item in payload.get("column_headers", [])]
+            points = [dict(zip(headers, values)) for values in payload.get("rows", [])]
+            usable = [point for point in points if isinstance(point.get("elapsedVideoTimeRatio"), (int, float)) and isinstance(point.get("audienceWatchRatio"), (int, float))]
+            if not usable:
+                continue
+            usable.sort(key=lambda point: float(point["elapsedVideoTimeRatio"]))
+            def nearest(target):
+                return min(usable, key=lambda point: abs(float(point["elapsedVideoTimeRatio"]) - target)).get("audienceWatchRatio")
+            drops = []
+            for first, second in zip(usable, usable[1:]):
+                drops.append((float(first.get("audienceWatchRatio", 0)) - float(second.get("audienceWatchRatio", 0)), first["elapsedVideoTimeRatio"], second["elapsedVideoTimeRatio"]))
+            largest = max(drops, default=(0, None, None))
+            curves.append({
+                "video_id": payload.get("video_id"), "checkpoint": payload.get("checkpoint"),
+                "observed_age_hours": payload.get("observed_age_hours"),
+                "opening_retention": nearest(0.05), "early_retention": nearest(0.25),
+                "mid_retention": nearest(0.5), "end_retention": nearest(0.95),
+                "largest_drop": round(largest[0], 4),
+                "largest_drop_region": [largest[1], largest[2]],
+            })
+        except Exception:
+            continue
+    return {
+        "curve_count": len(curves),
+        "median_opening_retention": med([item.get("opening_retention") for item in curves]),
+        "median_mid_story_retention": med([item.get("mid_retention") for item in curves]),
+        "median_end_retention": med([item.get("end_retention") for item in curves]),
+        "examples": curves[:20],
+    }
+
+
+def shorts_feed_diagnostics(rows: list[dict]) -> dict:
+    distribution_values = [row.get("views_2h") for row in rows if row.get("views_2h") is not None]
+    checkpoint = "2h"
+    if len(distribution_values) < 5:
+        distribution_values = [row.get("views_6h") for row in rows if row.get("views_6h") is not None]
+        checkpoint = "6h"
+    distribution_median = med(distribution_values)
+    response_median = med([row.get("shorts_source_engaged_view_rate_percentage") for row in rows])
+    examples = []
+    counts = {}
+    for row in rows:
+        exposure = row.get(f"views_{checkpoint}")
+        response = row.get("shorts_source_engaged_view_rate_percentage")
+        if distribution_median is None or response_median is None or exposure is None or response is None:
+            label = "insufficient_evidence"
+        elif float(exposure) < float(distribution_median) * 0.5 and float(response) >= float(response_median):
+            label = "low_distribution_strong_response"
+        elif float(exposure) >= float(distribution_median) and float(response) < float(response_median):
+            label = "strong_distribution_weak_response"
+        elif float(exposure) >= float(distribution_median):
+            label = "strong_distribution_strong_response"
+        else:
+            label = "low_distribution_weak_response"
+        counts[label] = counts.get(label, 0) + 1
+        if len(examples) < 30:
+            examples.append({
+                "content_id": row.get("content_id"), "title": row.get("title"),
+                "classification": label, "distribution_checkpoint": checkpoint,
+                "checkpoint_views": exposure, "shorts_source_views": row.get("shorts_source_views"),
+                "shorts_source_engaged_view_rate_percentage": response,
+                "average_view_percentage": row.get("retention"),
+            })
+    return {
+        "terminology": "Shorts-source views; not the exact YouTube Studio 'Shown in feed' metric",
+        "distribution_checkpoint": checkpoint,
+        "distribution_median_views": distribution_median,
+        "response_median_percentage": response_median,
+        "classification_counts": counts,
+        "examples": examples,
+    }
 
 
 def build_summary(root: Path, current: dict) -> dict:
     rows = performance_rows(all_snapshots(root, current))
     rank_key = None
-    for key in ("views_7d", "views_72h", "views_24h", "views_6h"):
+    for key in ("views_7d", "views_72h", "views_24h", "views_6h", "views_2h"):
         if sum(r.get(key) is not None for r in rows) >= 5:
             rank_key = key
             break
     if rank_key is None:
-        rank_key = next((key for key in ("views_7d", "views_72h", "views_24h", "views_6h") if any(r.get(key) is not None for r in rows)), None)
+        rank_key = next((key for key in ("views_7d", "views_72h", "views_24h", "views_6h", "views_2h") if any(r.get(key) is not None for r in rows)), None)
     ranked = [r for r in rows if rank_key and r.get(rank_key) is not None]
     top = sorted(ranked, key=lambda r: float(r.get(rank_key) or 0), reverse=True)[:5] if rank_key else []
     mature = [r for r in rows if r.get("retention") is not None]
@@ -647,48 +900,157 @@ def build_summary(root: Path, current: dict) -> dict:
         "trend_performance": group_summary(rows, "trend_lane"),
         "trend_topic_performance": trend_topic_summary(rows),
         "publish_time_performance_sgt": group_summary(rows, "publish_time_bucket_sgt"),
-        "distribution_breakdowns": current.get("distribution_breakdowns", {}),
+        "publish_hour_performance_sgt": group_summary(rows, "publish_hour_sgt"),
+        "publish_slot_performance_sgt": group_summary(rows, "publish_slot_sgt"),
+        "publication_spacing_performance": publication_spacing_summary(rows),
+        "geography_analysis": report_analysis(current, "geography", ("country",), 50),
+        "traffic_source_analysis": report_analysis(current, "traffic_source", ("insightTrafficSourceType",), 50),
+        "playback_location_analysis": report_analysis(current, "playback_location", ("insightPlaybackLocationType",), 50),
+        "device_operating_system_analysis": report_analysis(current, "device_os", ("deviceType", "operatingSystem"), 100),
+        "subscriber_status_analysis": report_analysis(current, "subscriber_status", ("subscribedStatus",), 20),
+        "demographics_analysis": report_analysis(current, "demographics", ("ageGroup", "gender"), 50),
+        "sharing_analysis": report_analysis(current, "sharing", ("sharingService",), 50),
+        "creator_content_type_analysis": report_analysis(current, "creator_content_type", ("creatorContentType",), 20),
+        "shorts_feed_diagnostics": shorts_feed_diagnostics(rows),
+        "retention_patterns": retention_pattern_summary(root),
         "top_examples": [compact_example(r) for r in top],
         "weak_retention_examples": [compact_example(r) for r in weak],
         "low_sample_categories": [{"category": c, "sample_size": counts[c]} for c in categories if counts[c] < 5],
+        "warnings": list(current.get("warnings") or []),
     }
-    return planner_projection(summary)
+    return summary
 
 
-def patch_context(root: Path, summary: dict) -> None:
-    path = root / "content" / "context.json"
-    context = read_json(path) if path.exists() else {}
-    if not isinstance(context, dict):
-        raise RuntimeError("content/context.json must be an object")
-    context["context_version"] = max(int(context.get("context_version", 1)), 2)
-    context["analytics_summary"] = summary
-    raw = json.dumps(context, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
-    if len(raw.encode()) > 80000:
-        raise RuntimeError("Planner context exceeds 80000 bytes after analytics summary")
-    path.write_text(raw, encoding="utf-8")
+def build_analytics_index(root: Path, summary: dict, warnings: list[str]) -> dict:
+    latest_snapshots = sorted((root / "realtime").glob("*/*.json"))
+    metadata_files = sorted((root / "raw").glob("**/*.metadata.json"))
+    latest_reporting_date = None
+    for path in metadata_files:
+        try:
+            value = read_json(path).get("endTime")
+            if value and (latest_reporting_date is None or value > latest_reporting_date):
+                latest_reporting_date = value
+        except Exception:
+            continue
+    def exists(pattern):
+        return any(root.glob(pattern))
+    return {
+        "analytics_repository": "skyfremen/youtube-analytics-data",
+        "analytics_version": ANALYTICS_VERSION,
+        "generated_at": summary.get("generated_at"),
+        "available_datasets": {
+            "realtime": bool(latest_snapshots),
+            "basic": exists("raw/basic/**/*.csv"),
+            "traffic_source": exists("raw/traffic-source/**/*.csv"),
+            "playback_location": exists("raw/playback-location/**/*.csv"),
+            "device_os": exists("raw/device-os/**/*.csv"),
+            "demographics": exists("raw/demographics/**/*.csv"),
+            "reach": exists("raw/reach-basic/**/*.csv") or exists("raw/reach-combined/**/*.csv"),
+            "combined": exists("raw/combined/**/*.csv"),
+            "retention": exists("retention/*/*.json"),
+        },
+        "latest_reporting_date": latest_reporting_date,
+        "latest_realtime_snapshot": latest_snapshots[-1].relative_to(root).as_posix() if latest_snapshots else None,
+        "warnings": list(warnings)[:50],
+    }
 
 
-def run(root: Path) -> tuple[Path, Path, Path]:
-    current = snapshot(root)
+def migrate_legacy_snapshots(planner_root: Path, warehouse_root: Path) -> list[Path]:
+    copied = []
+    target = warehouse_root / "realtime" / "legacy"
+    for source in sorted((planner_root / "content" / "analytics" / "snapshots").glob("analytics-*.json")):
+        destination = target / source.name
+        if destination.exists():
+            continue
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+        copied.append(destination)
+    return copied
+
+
+def load_manifest(path: Path, default: dict) -> dict:
+    try:
+        value = read_json(path)
+        return value if isinstance(value, dict) else dict(default)
+    except (OSError, json.JSONDecodeError):
+        return dict(default)
+
+
+def rebuild_planner_context(root: Path) -> Path:
+    subprocess.run([sys.executable, "pipeline.py", "context"], cwd=root, check=True)
+    return root / "content" / "context.json"
+
+
+def run(planner_root: Path, warehouse_root: Path, collected_at: datetime | None = None) -> AnalyticsOutputs:
+    collected_at = collected_at or now_utc()
+    token = access_token()
+    current = snapshot(planner_root, token, collected_at)
     stamp = current["collected_at"].replace("-", "").replace(":", "")
-    snap_path = root / "content" / "analytics" / "snapshots" / f"analytics-{stamp}.json"
+    snap_path = warehouse_root / "realtime" / collected_at.date().isoformat() / f"analytics-{stamp}.json"
     write_json(snap_path, current)
-    summary = build_summary(root, current)
-    summary_path = root / "content" / "analytics-summary.json"
+    warehouse_files = [snap_path, *migrate_legacy_snapshots(planner_root, warehouse_root)]
+
+    jobs_path = warehouse_root / "manifest" / "report-jobs.json"
+    state_path = warehouse_root / "manifest" / "collection-state.json"
+    schema_path = warehouse_root / "manifest" / "schema-version.json"
+    jobs = load_manifest(jobs_path, {"analytics_version": ANALYTICS_VERSION, "jobs": {}, "report_types": {}})
+    state = load_manifest(state_path, {"analytics_version": ANALYTICS_VERSION, "downloaded_reports": {}, "retention_checkpoints": {}})
+    warnings = list(current.get("warnings") or [])
+
+    reporting = sync_reporting(
+        token, warehouse_root, jobs, state,
+        lambda method, path, body=None: reporting_json(method, path, token, body),
+        lambda url: reporting_bytes(url, token), collected_at,
+    )
+    warehouse_files.extend(reporting.files)
+    warnings.extend(reporting.warnings)
+
+    retention = collect_retention(
+        current.get("videos", []), state, warehouse_root,
+        lambda params: analytics_report(params, token), collected_at,
+    )
+    warehouse_files.extend(retention.files)
+    warnings.extend(retention.warnings)
+    state["analytics_version"] = ANALYTICS_VERSION
+    state["latest_realtime_snapshot"] = snap_path.relative_to(warehouse_root).as_posix()
+    state["updated_at"] = current["collected_at"]
+    write_json(jobs_path, jobs)
+    write_json(state_path, state)
+    write_json(schema_path, {
+        "analytics_version": ANALYTICS_VERSION,
+        "schema": "wacky-dramas-youtube-analytics",
+        "updated_at": current["collected_at"],
+    })
+    warehouse_files.extend((jobs_path, state_path, schema_path))
+
+    current["warnings"] = warnings
+    summary = build_summary(warehouse_root, current)
+    projection = planner_projection(summary)
+    index = build_analytics_index(warehouse_root, summary, warnings)
+    summary_path = planner_root / "content" / "analytics-summary.json"
+    projection_path = planner_root / "content" / "planner-analytics.json"
+    index_path = planner_root / "content" / "analytics-index.json"
     write_json(summary_path, summary)
-    patch_context(root, summary)
+    write_json(projection_path, projection)
+    write_json(index_path, index)
+    context_path = rebuild_planner_context(planner_root)
     print(f"Analytics PASS videos={len(current['videos'])} detailed={current['detailed_analytics_available']}")
-    if current.get("warning"):
-        print(f"::warning::{current['warning']}")
-    return snap_path, summary_path, root / "content" / "context.json"
+    for warning in warnings:
+        print(f"::warning::{warning}")
+    return AnalyticsOutputs(
+        planner_files=[summary_path, projection_path, index_path, context_path],
+        warehouse_files=sorted(set(warehouse_files)),
+        warnings=warnings,
+    )
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--state-dir", required=True)
+    ap.add_argument("--planner-dir", required=True)
+    ap.add_argument("--warehouse-dir", required=True)
     args = ap.parse_args()
     try:
-        run(Path(args.state_dir).resolve())
+        run(Path(args.planner_dir).resolve(), Path(args.warehouse_dir).resolve())
     except Exception as exc:
         print(f"::error::ANALYTICS_FAILED {exc}", file=sys.stderr)
         raise SystemExit(1)
