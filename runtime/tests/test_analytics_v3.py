@@ -128,6 +128,25 @@ class OptionalAnalyticsTests(unittest.TestCase):
 
 
 class DerivedArtifactTests(unittest.TestCase):
+    def test_index_selects_newest_snapshot_across_dated_and_legacy_folders(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            legacy = root / "realtime" / "legacy" / "analytics-20260925T120000Z.json"
+            current = root / "realtime" / "2026-09-26" / "analytics-20260926T120000Z.json"
+            legacy.parent.mkdir(parents=True)
+            current.parent.mkdir(parents=True)
+            legacy.write_text("{}", encoding="utf-8")
+            current.write_text("{}", encoding="utf-8")
+
+            index = analytics.build_analytics_index(
+                root, {"generated_at": "2026-09-26T12:00:00Z"}, [],
+            )
+
+        self.assertEqual(
+            index["latest_realtime_snapshot"],
+            "realtime/2026-09-26/analytics-20260926T120000Z.json",
+        )
+
     def test_planner_projection_and_index_bound_warning_lists(self):
         warnings = [f"warning {i}" for i in range(20)]
         summary = {

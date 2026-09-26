@@ -943,7 +943,8 @@ def build_summary(root: Path, current: dict) -> dict:
 
 
 def build_analytics_index(root: Path, summary: dict, warnings: list[str]) -> dict:
-    latest_snapshots = sorted((root / "realtime").glob("*/*.json"))
+    latest_snapshots = list((root / "realtime").glob("*/*.json"))
+    latest_snapshot = max(latest_snapshots, key=lambda path: path.name, default=None)
     metadata_files = sorted((root / "raw").glob("**/*.metadata.json"))
     latest_reporting_date = None
     for path in metadata_files:
@@ -971,7 +972,7 @@ def build_analytics_index(root: Path, summary: dict, warnings: list[str]) -> dic
             "retention": exists("retention/*/*.json"),
         },
         "latest_reporting_date": latest_reporting_date,
-        "latest_realtime_snapshot": latest_snapshots[-1].relative_to(root).as_posix() if latest_snapshots else None,
+        "latest_realtime_snapshot": latest_snapshot.relative_to(root).as_posix() if latest_snapshot else None,
         "warnings": compact_warnings(warnings),
     }
 
