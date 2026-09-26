@@ -764,6 +764,16 @@ def planner_projection(summary: dict) -> dict:
 
 def report_analysis(current: dict, report_name: str, dimension_keys: tuple[str, ...], limit: int = 50) -> dict:
     report = (current.get("analytics_reports") or {}).get(report_name) or {}
+    if not report:
+        legacy_key = {"geography": "geography", "traffic_source": "traffic_sources"}.get(report_name)
+        legacy = (current.get("distribution_breakdowns") or {}).get(legacy_key) if legacy_key else None
+        if isinstance(legacy, dict):
+            return {
+                "sample_rows": len(legacy.get("top") or []),
+                "views_total": metric_int(legacy.get("views_total")),
+                "top": list(legacy.get("top") or [])[:limit],
+                "source_compatibility": "legacy_v2_aggregate",
+            }
     rows = []
     for row in report.get("rows", []):
         if str(row.get("creatorContentType", "SHORTS")).upper() != "SHORTS":

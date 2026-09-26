@@ -117,6 +117,16 @@ class OptionalAnalyticsTests(unittest.TestCase):
 
 
 class DerivedArtifactTests(unittest.TestCase):
+    def test_legacy_distribution_breakdowns_survive_v3_summary_backfill(self):
+        current = {
+            "distribution_breakdowns": {
+                "geography": {"views_total": 10, "top": [{"country": "US", "views": 10}]},
+                "traffic_sources": {"views_total": 10, "top": [{"source": "SHORTS", "views": 9}]},
+            }
+        }
+        self.assertEqual(analytics.report_analysis(current, "geography", ("country",))["top"][0]["country"], "US")
+        self.assertEqual(analytics.report_analysis(current, "traffic_source", ("insightTrafficSourceType",))["top"][0]["source"], "SHORTS")
+
     def test_detailed_summary_projection_and_index_have_separate_shapes(self):
         current = {
             "analytics_version": 3,
