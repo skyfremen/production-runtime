@@ -37,7 +37,11 @@ class RetentionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = {"retention_checkpoints": {}}
-            videos = [{"youtube_video_id": "aaaaaaaaaaa", "age_hours": 76.25}]
+            videos = [{
+                "youtube_video_id": "aaaaaaaaaaa",
+                "age_hours": 76.25,
+                "publish_at": "2026-09-22T08:00:00Z",
+            }]
             first = collect_retention(
                 videos, state, root, query,
                 datetime(2026, 9, 26, tzinfo=timezone.utc),
@@ -54,6 +58,7 @@ class RetentionTests(unittest.TestCase):
             self.assertEqual(payload["checkpoint"], "72h")
             self.assertEqual(payload["observed_age_hours"], 76.25)
             self.assertIn("startedWatching", calls[0]["metrics"])
+            self.assertEqual(calls[0]["startDate"], "2026-09-22")
 
     def test_optional_query_failure_warns_and_does_not_mark_complete(self):
         def query(_params):

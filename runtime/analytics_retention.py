@@ -13,6 +13,7 @@ CHECKPOINT_WINDOWS = {
     "7d": (144.0, 216.0),
 }
 RETENTION_METRICS = "audienceWatchRatio,relativeRetentionPerformance,startedWatching,stoppedWatching,totalSegmentImpressions"
+EARLIEST_RETENTION_DATE = "2008-07-01"
 
 
 @dataclass
@@ -56,6 +57,15 @@ def collect_retention(
     completed = collection_state.setdefault("retention_checkpoints", {})
     attempts = collection_state.setdefault("retention_attempts", {})
     captured_at = iso_z(collected_at)
+    start_dates: dict[str, str] = {}
+    for item in videos:
+        video_id = str(item.get("youtube_video_id") or "")
+        raw = str(item.get("publish_at") or "")
+        try:
+            published = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            start_dates[video_id] = published.date().isoformat()
+        except (TypeError, ValueError):
+            start_dates[video_id] = EARLIEST_RETENTION_DATE
     due = due_retention_checkpoints(videos, completed)
     due.sort(key=lambda item: (
         int((attempts.get(f"{item[0]}/{item[1]}") or {}).get("attempts") or 0),
@@ -76,7 +86,7 @@ def collect_retention(
         try:
             report = query({
                 "ids": "channel==MINE",
-                "startDate": "2000-01-01",
+                "startDate": start_dates.get(video_id, EARLIEST_RETENTION_DATE),
                 "endDate": collected_at.date().isoformat(),
                 "metrics": RETENTION_METRICS,
                 "dimensions": "elapsedVideoTimeRatio",
