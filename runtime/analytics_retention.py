@@ -49,12 +49,30 @@ def collect_retention(
     warehouse_root: Path,
     query,
     collected_at: datetime,
+    max_queries: int = 24,
 ) -> RetentionResult:
     files: list[Path] = []
     warnings: list[str] = []
     completed = collection_state.setdefault("retention_checkpoints", {})
+    attempts = collection_state.setdefault("retention_attempts", {})
     captured_at = iso_z(collected_at)
-    for video_id, checkpoint, age in due_retention_checkpoints(videos, completed):
+    due = due_retention_checkpoints(videos, completed)
+    due.sort(key=lambda item: (
+        int((attempts.get(f"{item[0]}/{item[1]}") or {}).get("attempts") or 0),
+        str((attempts.get(f"{item[0]}/{item[1]}") or {}).get("last_attempted_at") or ""),
+        abs(item[2] - (72.0 if item[1] == "72h" else 168.0)),
+        item[0],
+    ))
+    empty_count = 0
+    error_types: dict[str, int] = {}
+    for video_id, checkpoint, age in due[:max(0, int(max_queries))]:
+        attempt_key = f"{video_id}/{checkpoint}"
+        previous = attempts.get(attempt_key) if isinstance(attempts.get(attempt_key), dict) else {}
+        attempts[attempt_key] = {
+            "attempts": int(previous.get("attempts") or 0) + 1,
+            "last_attempted_at": captured_at,
+            "observed_age_hours": round(age, 2),
+        }
         try:
             report = query({
                 "ids": "channel==MINE",
@@ -65,7 +83,7 @@ def collect_retention(
                 "filters": f"video=={video_id}",
             })
             if not (report.get("rows") or []):
-                warnings.append(f"Optional retention {video_id}/{checkpoint} returned an empty curve; will retry")
+                empty_count += 1
                 continue
             path = warehouse_root / "retention" / video_id / f"{checkpoint}.json"
             payload = {
@@ -87,5 +105,10 @@ def collect_retention(
             }
             files.append(path)
         except Exception as exc:
-            warnings.append(f"Optional retention {video_id}/{checkpoint} unavailable: {type(exc).__name__}")
+            name = type(exc).__name__
+            error_types[name] = error_types.get(name, 0) + 1
+    if empty_count:
+        warnings.append(f"Optional retention returned empty curves for {empty_count} due checkpoints; will retry")
+    for name, count in sorted(error_types.items()):
+        warnings.append(f"Optional retention unavailable for {count} due checkpoints ({name}); will retry")
     return RetentionResult(files, warnings)

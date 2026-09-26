@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.error import HTTPError
 
 from analytics_reporting import sync_reporting
 
@@ -54,6 +55,18 @@ class FakeReportingApi:
 
 
 class ReportingSyncTests(unittest.TestCase):
+    def test_discovery_http_error_reports_safe_status_and_reason(self):
+        def forbidden(_method, _path, _body=None):
+            raise HTTPError("https://example.invalid", 403, "Forbidden", {}, None)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result = sync_reporting(
+                "token", Path(tmp), {"jobs": {}}, {"downloaded_reports": {}},
+                forbidden, lambda _url: b"", datetime(2026, 9, 26, tzinfo=timezone.utc),
+            )
+
+        self.assertEqual(result.warnings, ["Reporting API discovery unavailable: HTTP 403 Forbidden"])
+
     def test_jobs_list_failure_does_not_create_possibly_duplicate_jobs(self):
         with tempfile.TemporaryDirectory() as tmp:
             api = FakeReportingApi()
@@ -113,6 +126,30 @@ class ReportingSyncTests(unittest.TestCase):
             self.assertTrue(any(path.name == "report-1.csv" for path in result.files))
             metadata = json.loads(next(path for path in result.files if path.suffix == ".json").read_text())
             self.assertEqual(metadata["report_type_id"], "channel_basic_a3")
+
+    def test_download_budget_defers_remaining_reports_for_later_runs(self):
+        api = FakeReportingApi()
+        original = api.json
+
+        def three_reports(method, path, body=None):
+            response = original(method, path, body)
+            if path == "jobs/job-basic/reports?pageSize=100":
+                response["reports"] = [
+                    {"id": f"report-{i}", "downloadUrl": f"https://example.invalid/report-{i}"}
+                    for i in range(1, 4)
+                ]
+            return response
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = {"downloaded_reports": {}}
+            result = sync_reporting(
+                "token", Path(tmp), {"jobs": {}}, state, three_reports, api.bytes,
+                datetime(2026, 9, 26, tzinfo=timezone.utc), max_downloads=2,
+            )
+
+        self.assertEqual(len(state["downloaded_reports"]), 2)
+        self.assertEqual(sum(call[0] == "DOWNLOAD" for call in api.calls), 2)
+        self.assertTrue(any("download budget" in warning for warning in result.warnings))
 
 
 if __name__ == "__main__":

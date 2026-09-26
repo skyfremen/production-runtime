@@ -128,6 +128,22 @@ class OptionalAnalyticsTests(unittest.TestCase):
 
 
 class DerivedArtifactTests(unittest.TestCase):
+    def test_planner_projection_and_index_bound_warning_lists(self):
+        warnings = [f"warning {i}" for i in range(20)]
+        summary = {
+            "generated_at": "2026-09-26T12:00:00Z",
+            "learning": {"minimum_pattern_sample": 12, "stage": "established", "analytics_weight": "normal"},
+            "warnings": warnings,
+        }
+
+        projection = analytics.planner_projection(summary)
+        with tempfile.TemporaryDirectory() as tmp:
+            index = analytics.build_analytics_index(Path(tmp), summary, warnings)
+
+        self.assertEqual(projection["warnings"], warnings[:5])
+        self.assertEqual(len(index["warnings"]), 9)
+        self.assertEqual(index["warnings"][-1], "12 additional analytics warnings omitted")
+
     def test_supported_patterns_require_mature_checkpoint_sample_threshold(self):
         summary = {
             "generated_at": "2026-09-26T12:00:00Z",

@@ -84,6 +84,41 @@ class RetentionTests(unittest.TestCase):
             self.assertTrue(any("empty" in warning for warning in result.warnings))
             self.assertEqual(state["retention_checkpoints"], {})
 
+    def test_query_budget_prioritizes_untried_checkpoints_and_aggregates_empty_warnings(self):
+        calls = []
+
+        def empty_query(params):
+            calls.append(params["filters"].removeprefix("video=="))
+            return {"columnHeaders": [], "rows": []}
+
+        videos = [
+            {"youtube_video_id": f"v{i:010d}", "age_hours": 72 + i}
+            for i in range(4)
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            state = {"retention_checkpoints": {}}
+            first = collect_retention(
+                videos, state, Path(tmp), empty_query,
+                datetime(2026, 9, 26, tzinfo=timezone.utc), max_queries=2,
+            )
+            first_calls = list(calls)
+            calls.clear()
+            second = collect_retention(
+                videos, state, Path(tmp), empty_query,
+                datetime(2026, 9, 26, 6, tzinfo=timezone.utc), max_queries=2,
+            )
+
+            self.assertEqual(len(first_calls), 2)
+            self.assertEqual(len(calls), 2)
+            self.assertTrue(set(first_calls).isdisjoint(calls))
+            self.assertEqual(first.warnings, [
+                "Optional retention returned empty curves for 2 due checkpoints; will retry",
+            ])
+            self.assertEqual(second.warnings, [
+                "Optional retention returned empty curves for 2 due checkpoints; will retry",
+            ])
+            self.assertEqual(len(state["retention_attempts"]), 4)
+
 
 if __name__ == "__main__":
     unittest.main()

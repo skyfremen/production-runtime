@@ -5,6 +5,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.error import HTTPError
 from urllib.parse import quote
 
 
@@ -51,6 +52,12 @@ def report_category(report_type_id: str) -> str:
     return "other-supported-report-types"
 
 
+def error_label(exc: Exception) -> str:
+    if isinstance(exc, HTTPError):
+        return f"HTTP {exc.code} {exc.reason}".strip()
+    return type(exc).__name__
+
+
 def paged(api_json, path: str, key: str) -> list[dict]:
     rows = []
     next_path = path
@@ -70,6 +77,7 @@ def sync_reporting(
     api_json,
     api_bytes,
     collected_at: datetime,
+    max_downloads: int = 100,
 ) -> ReportingSyncResult:
     del token  # Authentication is owned by the injected HTTP transport.
     files: list[Path] = []
@@ -83,7 +91,7 @@ def sync_reporting(
     try:
         discovered = paged(api_json, "reportTypes?pageSize=100", "reportTypes")
     except Exception as exc:
-        warnings.append(f"Reporting API discovery unavailable: {type(exc).__name__}")
+        warnings.append(f"Reporting API discovery unavailable: {error_label(exc)}")
         return ReportingSyncResult(files, warnings)
 
     report_types = {str(item["id"]): item for item in discovered if relevant_report_type(item)}
@@ -134,6 +142,8 @@ def sync_reporting(
     jobs_manifest["jobs"] = {key: by_type[key] for key in sorted(by_type)}
     jobs_manifest["updated_at"] = timestamp
 
+    downloads = 0
+    deferred = 0
     for report_type_id, job in sorted(by_type.items()):
         job_id = str(job.get("id") or "")
         if not job_id:
@@ -147,6 +157,9 @@ def sync_reporting(
             report_id = str(report.get("id") or "")
             download_url = str(report.get("downloadUrl") or "")
             if not report_id or not download_url or report_id in collection_state["downloaded_reports"]:
+                continue
+            if downloads >= max(0, int(max_downloads)):
+                deferred += 1
                 continue
             try:
                 payload = api_bytes(download_url)
@@ -174,7 +187,14 @@ def sync_reporting(
                     "retrieved_at": timestamp,
                 }
                 files.extend((csv_path, metadata_path))
+                downloads += 1
             except Exception as exc:
                 warnings.append(f"Optional Reporting download {report_id} unavailable: {type(exc).__name__}")
+
+    if deferred:
+        warnings.append(
+            f"Reporting download budget reached after {downloads} new reports; "
+            f"{deferred} reports deferred to later runs"
+        )
 
     return ReportingSyncResult(files, warnings)

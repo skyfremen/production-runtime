@@ -972,8 +972,15 @@ def build_analytics_index(root: Path, summary: dict, warnings: list[str]) -> dic
         },
         "latest_reporting_date": latest_reporting_date,
         "latest_realtime_snapshot": latest_snapshots[-1].relative_to(root).as_posix() if latest_snapshots else None,
-        "warnings": list(warnings)[:50],
+        "warnings": compact_warnings(warnings),
     }
+
+
+def compact_warnings(warnings: list[str], limit: int = 8) -> list[str]:
+    values = list(warnings)
+    if len(values) <= limit:
+        return values
+    return [*values[:limit], f"{len(values) - limit} additional analytics warnings omitted"]
 
 
 def migrate_legacy_snapshots(planner_root: Path, warehouse_root: Path) -> list[Path]:
