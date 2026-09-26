@@ -13,6 +13,7 @@ CHECKPOINT_WINDOWS = {
     "7d": (144.0, 216.0),
 }
 RETENTION_METRICS = "audienceWatchRatio,relativeRetentionPerformance,startedWatching,stoppedWatching,totalSegmentImpressions"
+CORE_RETENTION_METRICS = "audienceWatchRatio,relativeRetentionPerformance"
 EARLIEST_RETENTION_DATE = "2008-07-01"
 
 
@@ -84,14 +85,17 @@ def collect_retention(
             "observed_age_hours": round(age, 2),
         }
         try:
-            report = query({
+            params = {
                 "ids": "channel==MINE",
                 "startDate": start_dates.get(video_id, EARLIEST_RETENTION_DATE),
                 "endDate": collected_at.date().isoformat(),
                 "metrics": RETENTION_METRICS,
                 "dimensions": "elapsedVideoTimeRatio",
                 "filters": f"video=={video_id}",
-            })
+            }
+            report = query(params)
+            if not (report.get("rows") or []):
+                report = query({**params, "metrics": CORE_RETENTION_METRICS})
             if not (report.get("rows") or []):
                 empty_count += 1
                 continue

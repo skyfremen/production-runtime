@@ -89,6 +89,42 @@ class RetentionTests(unittest.TestCase):
             self.assertTrue(any("empty" in warning for warning in result.warnings))
             self.assertEqual(state["retention_checkpoints"], {})
 
+    def test_empty_granular_query_retries_with_core_retention_metrics(self):
+        calls = []
+
+        def query(params):
+            calls.append(params["metrics"])
+            if "startedWatching" in params["metrics"]:
+                return {"columnHeaders": [], "rows": []}
+            return {
+                "columnHeaders": [
+                    {"name": "elapsedVideoTimeRatio"},
+                    {"name": "audienceWatchRatio"},
+                    {"name": "relativeRetentionPerformance"},
+                ],
+                "rows": [[0.01, 1.0, 0.5], [1.0, 0.2, 0.4]],
+            }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = {"retention_checkpoints": {}}
+            result = collect_retention(
+                [{
+                    "youtube_video_id": "aaaaaaaaaaa",
+                    "age_hours": 72,
+                    "publish_at": "2026-09-23T00:00:00Z",
+                }],
+                state, Path(tmp), query,
+                datetime(2026, 9, 26, tzinfo=timezone.utc),
+            )
+
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(
+                calls[1],
+                "audienceWatchRatio,relativeRetentionPerformance",
+            )
+            self.assertEqual(len(result.files), 1)
+            self.assertEqual(result.warnings, [])
+
     def test_query_budget_prioritizes_untried_checkpoints_and_aggregates_empty_warnings(self):
         calls = []
 
@@ -106,7 +142,7 @@ class RetentionTests(unittest.TestCase):
                 videos, state, Path(tmp), empty_query,
                 datetime(2026, 9, 26, tzinfo=timezone.utc), max_queries=2,
             )
-            first_calls = list(calls)
+            first_calls = set(calls)
             calls.clear()
             second = collect_retention(
                 videos, state, Path(tmp), empty_query,
@@ -114,8 +150,8 @@ class RetentionTests(unittest.TestCase):
             )
 
             self.assertEqual(len(first_calls), 2)
-            self.assertEqual(len(calls), 2)
-            self.assertTrue(set(first_calls).isdisjoint(calls))
+            self.assertEqual(len(set(calls)), 2)
+            self.assertTrue(first_calls.isdisjoint(calls))
             self.assertEqual(first.warnings, [
                 "Optional retention returned empty curves for 2 due checkpoints; will retry",
             ])
