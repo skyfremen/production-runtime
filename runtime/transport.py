@@ -76,7 +76,7 @@ def fetch_execution(execution_id,source_sha,output):
     if len(matches)!=1: raise TransportError("Immutable batch request does not contain exactly one execution item")
     item=matches[0]; item_raw=encoded_json(item)
     if git_blob_sha(item_raw)!=item_blob_sha: raise TransportError("Immutable batch item differs from execution fence")
-    registry_path="data/backgrounds.json"; registry_raw=state.read(registry_path,source_sha); registry=_json(registry_raw,registry_path)
+    registry_path="data/backgrounds.json"; registry_raw=state.read(registry_path,request_source_sha); registry=_json(registry_raw,registry_path)
     if not isinstance(registry.get("assets"),list): raise TransportError("Background registry must contain assets[]")
     local_request=Path(f"runtime/content/requests/{content_id}.json"); local_registry=Path("runtime/data/backgrounds.json")
     local_request.parent.mkdir(parents=True,exist_ok=True); local_registry.parent.mkdir(parents=True,exist_ok=True)
