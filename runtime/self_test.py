@@ -35,9 +35,9 @@ class FakeYoutube:
 
 def main():
     request=sample_request(); validate_request_data(request); ok(True,"v2 scheduled request schema")
-    for minute in ("20","40"):
+    for minute in ("10","20","30","40","50"):
         q=json.loads(json.dumps(request)); q["publication"]["publish_at"]=f"2030-01-01T00:{minute}:00Z"; validate_request_data(q); ok(True,f"minute {minute} publication slot accepted")
-    bad_slot=json.loads(json.dumps(request)); bad_slot["publication"]["publish_at"]="2030-01-01T00:10:00Z"
+    bad_slot=json.loads(json.dumps(request)); bad_slot["publication"]["publish_at"]="2030-01-01T00:05:00Z"
     try: validate_request_data(bad_slot)
     except ValueError: ok(True,"unsupported publication minute rejected")
     else: raise AssertionError("unsupported publication minute must fail")
