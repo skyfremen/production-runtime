@@ -81,9 +81,9 @@ class GitHubRepository:
             with urlopen(req, timeout=60) as response:
                 return json.load(response)
         except HTTPError as exc:
-            raise RemoteError(f"GitHub API {method} {path} failed HTTP {exc.code}") from None
+            raise RemoteError(f"{self.role} GitHub API {method} {path} failed HTTP {exc.code}") from None
         except (URLError, TimeoutError) as exc:
-            raise RemoteError(f"GitHub API {method} {path} network failure: {type(exc).__name__}") from None
+            raise RemoteError(f"{self.role} GitHub API {method} {path} network failure: {type(exc).__name__}") from None
 
     def head_sha(self) -> str:
         data = self.request("git/ref/heads/main")
