@@ -1024,7 +1024,6 @@ def run(planner_root: Path, warehouse_root: Path, collected_at: datetime | None 
     current = snapshot(planner_root, token, collected_at)
     stamp = current["collected_at"].replace("-", "").replace(":", "")
     snap_path = warehouse_root / "realtime" / collected_at.date().isoformat() / f"analytics-{stamp}.json"
-    write_json(snap_path, current)
     warehouse_files = [snap_path, *migrate_legacy_snapshots(planner_root, warehouse_root)]
 
     jobs_path = warehouse_root / "manifest" / "report-jobs.json"
@@ -1061,6 +1060,7 @@ def run(planner_root: Path, warehouse_root: Path, collected_at: datetime | None 
     warehouse_files.extend((jobs_path, state_path, schema_path))
 
     current["warnings"] = warnings
+    write_json(snap_path, current)
     summary = build_summary(warehouse_root, current)
     projection = planner_projection(summary)
     index = build_analytics_index(warehouse_root, summary, warnings)

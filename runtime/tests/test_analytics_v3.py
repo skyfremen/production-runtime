@@ -3,6 +3,8 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import analytics
 
@@ -128,6 +130,58 @@ class OptionalAnalyticsTests(unittest.TestCase):
 
 
 class DerivedArtifactTests(unittest.TestCase):
+    def test_realtime_snapshot_preserves_reporting_and_retention_warnings(self):
+        current = {
+            "analytics_version": 3,
+            "collected_at": "2026-09-26T12:00:00Z",
+            "detailed_analytics_available": True,
+            "analytics_reports": {},
+            "warnings": ["snapshot warning"],
+            "videos": [],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            planner = root / "planner"
+            warehouse = root / "warehouse"
+            planner.mkdir()
+            warehouse.mkdir()
+            context = planner / "content" / "context.json"
+            context.parent.mkdir()
+            context.write_text("{}", encoding="utf-8")
+
+            with patch.object(analytics, "access_token", return_value="token"), patch.object(
+                analytics, "snapshot", return_value=current
+            ), patch.object(
+                analytics,
+                "sync_reporting",
+                return_value=SimpleNamespace(files=[], warnings=["reporting warning"]),
+            ), patch.object(
+                analytics,
+                "collect_retention",
+                return_value=SimpleNamespace(files=[], warnings=["retention warning"]),
+            ), patch.object(
+                analytics, "build_summary", return_value={"generated_at": current["collected_at"], "warnings": []}
+            ), patch.object(
+                analytics, "planner_projection", return_value={}
+            ), patch.object(
+                analytics, "build_analytics_index", return_value={}
+            ), patch.object(
+                analytics, "rebuild_planner_context", return_value=context
+            ):
+                analytics.run(
+                    planner,
+                    warehouse,
+                    datetime(2026, 9, 26, 12, tzinfo=timezone.utc),
+                )
+
+            snapshot_path = next((warehouse / "realtime").glob("*/*.json"))
+            stored = json.loads(snapshot_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(
+            stored["warnings"],
+            ["snapshot warning", "reporting warning", "retention warning"],
+        )
+
     def test_index_selects_newest_snapshot_across_dated_and_legacy_folders(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
