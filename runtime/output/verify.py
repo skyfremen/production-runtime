@@ -6,12 +6,15 @@ from output.state import GitHubState, RecoveryBlocked, check_identity, evidence_
 from output.transfer import authenticated_channel, make_client
 
 # YouTube can take longer than a minute to move a freshly uploaded Short from
-# processing to processed. Keep verification bounded, but allow ~4 minutes.
+# processing to processed. Keep each verification window bounded at ~4 minutes.
 RETRY_DELAYS=(0,2,4,8,15,30,30,30,30,30,30,30)
 # GitHub Contents reads can briefly lag a just-acknowledged write when several
 # production jobs commit evidence concurrently. Require durable evidence, but
 # tolerate short read-after-write visibility lag.
 EVIDENCE_RETRY_DELAYS=(0,1,2,4,8)
+
+class VerificationPending(RecoveryBlocked):
+    """Remote upload exists but is still converging toward its scheduled state."""
 
 def _instant(raw):
     try: return datetime.fromisoformat(str(raw).replace("Z","+00:00"))
@@ -53,11 +56,14 @@ def verify_video(youtube,request,identity,evidence,sleep=time.sleep):
         publish_at=expected_publish.isoformat().replace("+00:00","Z")
         return {"passed":True,"state":"verified_scheduled","verified_at":now(),**identity,"youtube_video_id":video_id,"channel_id":channel["id"],"privacy_status":"private","publish_at":publish_at,"upload_status":"processed","association_method":"immutable_upload_record+remote_marker","observed_marker_tags":[marker],"attempts":attempt,"prior_observations":observations}
     last=observations[-1] if observations else {"state":"unknown"}
-    raise RecoveryBlocked(f"Remote verification did not reach processed scheduled-private state within bounded attempts; last_observation={last}")
+    raise VerificationPending(f"Remote verification is still pending after one bounded window; last_observation={last}")
 
 def main():
     ap=argparse.ArgumentParser(); ap.add_argument("--request",required=True); a=ap.parse_args(); request=load_json(a.request); identity=identity_for(a.request,request); state=GitHubState(); evidence=_load_upload_evidence(state,identity)
     verification=verify_video(make_client(),request,identity,evidence); upload_path=OUTPUT_DIR/"upload_result.json"; payload=load_json(upload_path) if upload_path.exists() else {"content_id":identity["content_id"],"youtube_video_id":verification["youtube_video_id"],"upload_evidence":evidence}; payload["verification"]=verification; payload["visibility"]="private"; payload["verified"]=True; atomic_write_json(upload_path,payload); atomic_write_json(OUTPUT_DIR/"youtube-verification.json",verification); print(f"Remote verification PASS {verification['youtube_video_id']} SCHEDULED {verification['publish_at']}")
 if __name__=="__main__":
     try: main()
+    except VerificationPending as e:
+        print(str(e))
+        raise SystemExit(75) from None
     except RecoveryBlocked as e: raise SystemExit(str(e)) from None
