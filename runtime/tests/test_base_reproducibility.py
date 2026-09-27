@@ -25,6 +25,21 @@ class BaseReproducibilityTests(unittest.TestCase):
         self.assertTrue(all(re.fullmatch(r"[A-Za-z0-9_.-]+==[^<>=!~]+", item) for item in dependencies))
         self.assertNotIn("python -m spacy download", dockerfile)
 
+    def test_transitive_dependencies_are_constrained_for_both_install_steps(self):
+        dockerfile = (ROOT / "base" / "Dockerfile").read_text(encoding="utf-8")
+        constraints_path = ROOT / "base" / "constraints.txt"
+        self.assertTrue(constraints_path.is_file())
+        constraints = [
+            line.strip()
+            for line in constraints_path.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+
+        self.assertGreater(len(constraints), 50)
+        self.assertTrue(all(re.fullmatch(r"[A-Za-z0-9_.-]+==[^<>=!~]+", item) for item in constraints))
+        self.assertIn("COPY base/constraints.txt /tmp/constraints.txt", dockerfile)
+        self.assertEqual(dockerfile.count("--constraint /tmp/constraints.txt"), 2)
+
     def test_downloaded_models_have_verified_sha256_digests(self):
         dockerfile = (ROOT / "base" / "Dockerfile").read_text(encoding="utf-8")
 

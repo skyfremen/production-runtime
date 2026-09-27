@@ -24,11 +24,13 @@ RUN apt-get update \
        git \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --index-url https://download.pytorch.org/whl/cpu \
-    torch==2.8.0 torchaudio==2.8.0
+COPY base/constraints.txt /tmp/constraints.txt
+RUN pip install --constraint /tmp/constraints.txt \
+    --index-url https://download.pytorch.org/whl/cpu \
+    torch==2.8.0+cpu torchaudio==2.8.0+cpu
 
 COPY base/dependencies.txt /tmp/dependencies.txt
-RUN pip install -r /tmp/dependencies.txt
+RUN pip install --constraint /tmp/constraints.txt -r /tmp/dependencies.txt
 
 RUN python - <<'PY'
 import hashlib
