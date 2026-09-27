@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.12-slim@sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4db6d462c84e51f
 
 LABEL org.opencontainers.image.source="https://github.com/skyfremen/production-runtime"
 
@@ -30,11 +30,26 @@ RUN pip install --index-url https://download.pytorch.org/whl/cpu \
 COPY base/dependencies.txt /tmp/dependencies.txt
 RUN pip install -r /tmp/dependencies.txt
 
-RUN python -m spacy download en_core_web_sm
+RUN python - <<'PY'
+import hashlib
+import urllib.request
+from pathlib import Path
+
+url = 'https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl'
+expected = '1932429db727d4bff3deed6b34cfc05df17794f4a52eeb26cf8928f7c1a0fb85'
+target = Path('/tmp/en_core_web_sm-3.8.0-py3-none-any.whl')
+urllib.request.urlretrieve(url, target)
+actual = hashlib.sha256(target.read_bytes()).hexdigest()
+if actual != expected:
+    raise SystemExit(f'spaCy model checksum mismatch: {actual}')
+PY
+RUN pip install /tmp/en_core_web_sm-3.8.0-py3-none-any.whl \
+    && rm /tmp/en_core_web_sm-3.8.0-py3-none-any.whl
 
 RUN mkdir -p "$RUNTIME_RESOURCE_HOME" \
     && python - <<'PY'
 import os
+import hashlib
 import urllib.request
 from pathlib import Path
 
@@ -42,13 +57,15 @@ assets = {
     Path(os.environ['RUNTIME_RESOURCE_A']): (
         'https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx',
         300_000_000,
+        '7d5df8ecf7d4b1878015a32686053fd0eebe2bc377234608764cc0ef3636a6c5',
     ),
     Path(os.environ['RUNTIME_RESOURCE_B']): (
         'https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin',
         20_000_000,
+        'bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d',
     ),
 }
-for target, (url, minimum) in assets.items():
+for target, (url, minimum, expected_sha256) in assets.items():
     target.parent.mkdir(parents=True, exist_ok=True)
     request = urllib.request.Request(url, headers={'User-Agent': 'runtime-builder/1.0'})
     with urllib.request.urlopen(request, timeout=240) as response, target.open('wb') as output:
@@ -56,6 +73,9 @@ for target, (url, minimum) in assets.items():
             output.write(chunk)
     if target.stat().st_size < minimum:
         raise SystemExit(f'Runtime asset is suspiciously small: {target} ({target.stat().st_size} bytes)')
+    actual_sha256 = hashlib.sha256(target.read_bytes()).hexdigest()
+    if actual_sha256 != expected_sha256:
+        raise SystemExit(f'Runtime asset checksum mismatch: {target.name} ({actual_sha256})')
     print(f'Prepared {target.name}: {target.stat().st_size} bytes')
 PY
 
@@ -86,7 +106,23 @@ print(f'Runtime asset validation passed: {audio.size} samples at {sample_rate} H
 PY
 
 RUN python - <<'PY'
+import os
+from pathlib import Path
+from huggingface_hub import snapshot_download
+
+repo_id = 'hexgrad/Kokoro-82M'
+revision = 'f3ff3571791e39611d31c381e3a41a3af07b4987'
+snapshot_download(repo_id=repo_id, revision=revision)
+ref = Path(os.environ['HF_HUB_CACHE']) / 'models--hexgrad--Kokoro-82M' / 'refs' / 'main'
+ref.parent.mkdir(parents=True, exist_ok=True)
+ref.write_text(revision, encoding='utf-8')
+PY
+
+ENV HF_HUB_OFFLINE=1
+RUN python - <<'PY'
+from huggingface_hub import is_offline_mode
 from kokoro import KPipeline
+assert is_offline_mode(), 'Offline mode must be active before fallback warmup'
 pipeline = KPipeline(lang_code='a', repo_id='hexgrad/Kokoro-82M')
 for _gs, _ps, _audio in pipeline('Runtime fallback warmup.', voice='af_heart', speed=1.75):
     break
@@ -101,7 +137,6 @@ model.eval()
 print('Alignment cache prepared')
 PY
 
-ENV HF_HUB_OFFLINE=1
 RUN python - <<'PY'
 from huggingface_hub import is_offline_mode
 from kokoro import KPipeline

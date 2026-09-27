@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'runtime/**'
+      - 'base/**'
       - '.github/workflows/single.yml'
       - '.github/workflows/verify.yml'
   workflow_dispatch:
@@ -33,6 +34,7 @@ jobs:
       - name: Compile and self-test without production access
         run: |
           python -m compileall -q runtime
+          PYTHONPATH=runtime python -m unittest discover -s runtime/tests
           PYTHONPATH=runtime python runtime/self_test.py
           PYTHONPATH=runtime python runtime/background_contract_test.py
           PYTHONPATH=runtime python runtime/preflight_contract_test.py
