@@ -67,6 +67,16 @@ class BaseReproducibilityTests(unittest.TestCase):
         self.assertIn("'base/**'", workflow)
         self.assertIn("python -m unittest discover -s runtime/tests", workflow)
 
+    def test_production_uses_the_verified_constrained_image(self):
+        workflow = (ROOT / ".github" / "workflows" / "single.yml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn(
+            "ghcr.io/skyfremen/runtime-base@sha256:c44ac7ba2457e0757954252ae24e266dd62e57a63f172d0d3520348ae1f9bd12",
+            workflow,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
