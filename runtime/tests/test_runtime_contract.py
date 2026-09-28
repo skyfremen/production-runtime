@@ -1,3 +1,4 @@
+import ast
 import inspect
 import unittest
 from pathlib import Path
@@ -5,7 +6,20 @@ from unittest.mock import patch
 
 from base import contract
 from resources import media, resolve
-from transform import compose, verify
+from transform import verify
+
+
+COMPOSE_PATH = Path(__file__).resolve().parents[1] / "transform" / "compose.py"
+
+
+def imports_from_base_contract(path):
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    return {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module == "base.contract"
+        for alias in node.names
+    }
 
 
 class RuntimeContractTests(unittest.TestCase):
@@ -20,13 +34,12 @@ class RuntimeContractTests(unittest.TestCase):
         self.assertEqual(5.0, contract.DEFAULT_TEST_RENDER_MAX_SECONDS)
         self.assertIs(
             contract.BLACKDETECT_MAX_ALLOWED_SECONDS,
-            compose.BLACKDETECT_MAX_ALLOWED_SECONDS,
-        )
-        self.assertIs(
-            contract.BLACKDETECT_MAX_ALLOWED_SECONDS,
             verify.BLACKDETECT_MAX_ALLOWED_SECONDS,
         )
-        compose_source = Path(compose.__file__).read_text(encoding="utf-8")
+        compose_imports = imports_from_base_contract(COMPOSE_PATH)
+        self.assertIn("BLACKDETECT_MAX_ALLOWED_SECONDS", compose_imports)
+        self.assertIn("DEFAULT_TEST_RENDER_MAX_SECONDS", compose_imports)
+        compose_source = COMPOSE_PATH.read_text(encoding="utf-8")
         verify_source = Path(verify.__file__).read_text(encoding="utf-8")
         self.assertIn('os.getenv("STORY_RENDER_MAX_SECONDS", str(DEFAULT_TEST_RENDER_MAX_SECONDS))', compose_source)
         self.assertIn('os.getenv("STORY_RENDER_MAX_SECONDS", str(DEFAULT_TEST_RENDER_MAX_SECONDS))', verify_source)
@@ -70,7 +83,7 @@ class RuntimeContractTests(unittest.TestCase):
             )
 
     def test_test_render_range_and_verifier_tolerance_are_unchanged(self):
-        compose_source = Path(compose.__file__).read_text(encoding="utf-8")
+        compose_source = COMPOSE_PATH.read_text(encoding="utf-8")
         verify_source = Path(verify.__file__).read_text(encoding="utf-8")
         self.assertIn("1.0 <= test_max <= 15.0", compose_source)
         self.assertIn("max_seconds + 0.55", verify_source)
