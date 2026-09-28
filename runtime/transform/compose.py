@@ -18,6 +18,7 @@ from transform.synth import (
     audio_metrics,
 )
 from base.contract import (
+    BLACKDETECT_MAX_ALLOWED_SECONDS, DEFAULT_TEST_RENDER_MAX_SECONDS,
     END_TAIL_SECONDS, START_LEAD_SECONDS, PRODUCTION_ENCODE_SAFETY_SECONDS, OUTPUT_DIR,
     PRODUCTION_MAX_SECONDS, atomic_write_json,
     env_bool, expected_video_config, load_json,
@@ -86,7 +87,6 @@ CARD_BOB_AMPLITUDE = 6
 X264_PRESET = "superfast"
 X264_CRF = 19
 BLACKDETECT_FILTER = "blackdetect=d=0.50:pic_th=0.98:pix_th=0.10"
-BLACKDETECT_MAX_ALLOWED_SECONDS = 0.75
 LIKE_CTA_CENTER_Y = 400
 LIKE_CTA_MAX_WIDTH = 940
 LIKE_CTA_FONT_SIZE = 54
@@ -510,7 +510,7 @@ def main():
     voice = narration_cfg["voice"]
     speed = float(narration_cfg["speed"])
     test_mode = env_bool("STORY_TEST_MODE", False)
-    test_max = float(os.getenv("STORY_RENDER_MAX_SECONDS", "5"))
+    test_max = float(os.getenv("STORY_RENDER_MAX_SECONDS", str(DEFAULT_TEST_RENDER_MAX_SECONDS)))
     if test_mode and not 1.0 <= test_max <= 15.0:
         raise SystemExit("STORY_RENDER_MAX_SECONDS must be 1-15 seconds in test mode")
 

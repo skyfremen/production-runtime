@@ -212,7 +212,8 @@ def download(
     target,
     target_width=TARGET_WIDTH,
     target_height=TARGET_HEIGHT,
-    segment_duration_seconds=175,
+    *,
+    segment_duration_seconds,
     media_source="registry_download_url",
 ):
     url = str(url or "").strip()

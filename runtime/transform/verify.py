@@ -7,6 +7,8 @@ import time
 from datetime import datetime, timezone
 
 from base.contract import (
+    BLACKDETECT_MAX_ALLOWED_SECONDS,
+    DEFAULT_TEST_RENDER_MAX_SECONDS,
     OUTPUT_DIR,
     PRODUCTION_MAX_SECONDS,
     atomic_write_json,
@@ -14,8 +16,6 @@ from base.contract import (
     expected_video_config,
     load_json,
 )
-
-BLACKDETECT_MAX_ALLOWED_SECONDS = 0.75
 
 
 def parse_rate(value):
@@ -143,7 +143,7 @@ def main():
     duration = float(info.get("format", {}).get("duration") or 0)
     test_mode = env_bool("STORY_TEST_MODE", False)
     if test_mode:
-        max_seconds = float(os.getenv("STORY_RENDER_MAX_SECONDS", "5"))
+        max_seconds = float(os.getenv("STORY_RENDER_MAX_SECONDS", str(DEFAULT_TEST_RENDER_MAX_SECONDS)))
         if duration > max_seconds + 0.55:
             raise SystemExit(
                 f"Render verification failed: test duration {duration:.3f}s exceeds "
