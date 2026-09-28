@@ -20,8 +20,9 @@ class ProductionPipeline:
         mapping=json.loads(self.base_env.get("REQUEST_SOURCE_MAP_JSON","{}")); identity=mapping.get(str(request))
         if not isinstance(identity,dict): raise PipelineError("Exact immutable request source mapping is missing")
         env=dict(self.base_env)
-        env["SOURCE_COMMIT_SHA"]=str(identity.get("source_commit_sha") or "")
-        env["SOURCE_REQUEST_BLOB_SHA"]=str(identity.get("request_blob_sha") or "")
+        env["SOURCE_COMMIT_SHA"]=str(identity.get("request_source_sha") or "")
+        env["SOURCE_REQUEST_BLOB_SHA"]=str(identity.get("item_blob_sha") or "")
+        env["REQUEST_IDENTITY_JSON"]=json.dumps(identity,separators=(",",":"),sort_keys=True)
         env["STORY_OUTPUT_DIR"]=f"runtime/output/{Path(request).stem}"
         env.setdefault("OMP_NUM_THREADS","2"); env.setdefault("MKL_NUM_THREADS","2")
         env.setdefault("OPENBLAS_NUM_THREADS","2"); env.setdefault("NUMEXPR_NUM_THREADS","2")

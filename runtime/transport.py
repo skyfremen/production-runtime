@@ -81,8 +81,10 @@ def fetch_execution(execution_id,source_sha,output):
     local_request=Path(f"runtime/content/requests/{content_id}.json"); local_registry=Path("runtime/data/backgrounds.json")
     local_request.parent.mkdir(parents=True,exist_ok=True); local_registry.parent.mkdir(parents=True,exist_ok=True)
     local_request.write_bytes(item_raw); local_registry.write_bytes(registry_raw)
-    manifest={"manifest_version":1,"execution_id":execution_id,"content_id":content_id,"requests":[local_request.as_posix()],"registry":local_registry.as_posix(),
-              "request_sources":{local_request.as_posix():{"source_commit_sha":request_source_sha,"request_blob_sha":item_blob_sha}},
+    identity={"execution_id":execution_id,"content_id":content_id,"request_id":request_id,"request_path":request_path,
+              "request_source_sha":request_source_sha,"request_blob_sha":request_blob_sha,"item_blob_sha":item_blob_sha}
+    manifest={"manifest_version":2,"execution_id":execution_id,"content_id":content_id,"requests":[local_request.as_posix()],"registry":local_registry.as_posix(),
+              "request_sources":{local_request.as_posix():identity},
               "private_execution_source_sha":source_sha,"contract_hash":contract_hash,"dispatch_id":dispatch_id}
     Path(output).write_text(json.dumps(manifest,indent=2,sort_keys=True)+"\n",encoding="utf-8")
     print(f"Fetch PASS execution={execution_id} content={content_id} batch={request_id}"); return manifest

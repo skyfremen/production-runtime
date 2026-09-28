@@ -35,7 +35,7 @@ def run_remote_verification(request,env):
 def run(manifest_path):
     manifest=json.loads(Path(manifest_path).read_text(encoding="utf-8"))
     requests=manifest.get("requests")
-    if manifest.get("manifest_version")!=1 or not isinstance(requests,list) or len(requests)!=1: raise RuntimeError("Execution manifest v1 must contain exactly one request")
+    if manifest.get("manifest_version")!=2 or not isinstance(requests,list) or len(requests)!=1: raise RuntimeError("Execution manifest v2 must contain exactly one request")
     request=requests[0]; data=json.loads(Path(request).read_text(encoding="utf-8")); validate_request_data(data)
     validate_request_backgrounds(data,load_registry(manifest["registry"]))
     mapping=manifest.get("request_sources") or {}
@@ -45,7 +45,8 @@ def run(manifest_path):
     summary=ProductionPipeline(1,base_env=env).run([request])
     if int(summary.get("failed",0)): raise RuntimeError("Production failed before remote verification")
     identity=mapping[request]
-    verify_env=dict(env); verify_env["SOURCE_COMMIT_SHA"]=identity["source_commit_sha"]; verify_env["SOURCE_REQUEST_BLOB_SHA"]=identity["request_blob_sha"]
+    verify_env=dict(env); verify_env["SOURCE_COMMIT_SHA"]=identity["request_source_sha"]; verify_env["SOURCE_REQUEST_BLOB_SHA"]=identity["item_blob_sha"]
+    verify_env["REQUEST_IDENTITY_JSON"]=json.dumps(identity,separators=(",",":"),sort_keys=True)
     run_remote_verification(request,verify_env)
     run_cmd(["python","runtime/output/result.py","--request",request],verify_env)
     Path("/tmp/runtime-public-summary.json").write_text(json.dumps({"success":1,"failed":0,"execution_id":manifest["execution_id"]},sort_keys=True)+"\n")

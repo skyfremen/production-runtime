@@ -47,10 +47,28 @@ class TransportSourceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, patch.object(
             transport, "PrivateState", FakeState
         ), patch("transport.Path.write_bytes"), patch("transport.Path.write_text"):
-            transport.fetch_execution(execution_id, execution_source, Path(tmp) / "manifest.json")
+            manifest = transport.fetch_execution(
+                execution_id, execution_source, Path(tmp) / "manifest.json"
+            )
 
         self.assertIn(("data/backgrounds.json", request_source), FakeState.calls)
         self.assertNotIn(("data/backgrounds.json", execution_source), FakeState.calls)
+        self.assertEqual(2, manifest["manifest_version"])
+        identity = manifest["request_sources"][
+            f"runtime/content/requests/{content_id}.json"
+        ]
+        self.assertEqual(
+            {
+                "execution_id": execution_id,
+                "content_id": content_id,
+                "request_id": request_id,
+                "request_path": f"content/requests/{request_id}.json",
+                "request_source_sha": request_source,
+                "request_blob_sha": transport.git_blob_sha(batch_raw),
+                "item_blob_sha": transport.git_blob_sha(item_raw),
+            },
+            identity,
+        )
 
 
 if __name__ == "__main__":
