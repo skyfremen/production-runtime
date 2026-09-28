@@ -1,4 +1,4 @@
-"""Append-only V1 upload evidence. An intent is an irreversible duplicate-upload fence."""
+"""Append-only upload evidence. An intent is an irreversible duplicate-upload fence."""
 import base64, hashlib, json, os, re, time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -66,14 +66,32 @@ class GitHubState:
 def identity_for(path,data):
     path=Path(path); cid=ensure_request_path_matches(path,data); expected=Path(f"runtime/content/requests/{cid}.json")
     if path.resolve()!=expected.resolve(): raise RecoveryBlocked("Publishing requires canonical local request path")
-    source=os.environ.get("SOURCE_COMMIT_SHA",""); expected_blob=os.environ.get("SOURCE_REQUEST_BLOB_SHA","")
-    if not re.fullmatch(r"[0-9a-f]{40}",source) or not re.fullmatch(r"[0-9a-f]{40}",expected_blob):
-        raise RecoveryBlocked("Exact immutable request source and blob are required")
+    try: identity=json.loads(os.environ.get("REQUEST_IDENTITY_JSON", ""))
+    except json.JSONDecodeError: raise RecoveryBlocked("Exact canonical identity is required") from None
+    if not isinstance(identity,dict): raise RecoveryBlocked("Exact canonical identity is required")
+    required={"execution_id","content_id","request_id","request_path","request_source_sha","request_blob_sha","item_blob_sha"}
+    if set(identity)!=required: raise RecoveryBlocked("Exact canonical identity is required")
+    if identity.get("content_id")!=cid or not re.fullmatch(r"ex-[0-9a-f]{24}",str(identity.get("execution_id") or "")):
+        raise RecoveryBlocked("Canonical identity does not match the request")
+    request_id=str(identity.get("request_id") or "")
+    if not re.fullmatch(r"rq-[0-9a-f]{24}",request_id) or identity.get("request_path")!=f"content/requests/{request_id}.json":
+        raise RecoveryBlocked("Canonical identity has an invalid batch request")
+    for field in ("request_source_sha","request_blob_sha","item_blob_sha"):
+        if not re.fullmatch(r"[0-9a-f]{40}",str(identity.get(field) or "")): raise RecoveryBlocked("Exact canonical identity is required")
     raw=path.read_bytes()
-    if blob_sha(raw)!=expected_blob: raise RecoveryBlocked("Request differs from immutable source")
-    return {"content_id":cid,"request_path":f"content/requests/{cid}.json","request_blob_sha":expected_blob,"source_commit_sha":source}
+    if blob_sha(raw)!=identity["item_blob_sha"]: raise RecoveryBlocked("Request differs from immutable source")
+    return identity
 def check_identity(evidence,identity):
-    for k,v in identity.items():
+    version=evidence.get("evidence_version")
+    if version==2:
+        expected=identity
+    elif version==1:
+        content_id=identity["content_id"]
+        expected={"content_id":content_id,"request_path":f"content/requests/{content_id}.json",
+                  "request_blob_sha":identity["item_blob_sha"],"source_commit_sha":identity["request_source_sha"]}
+    else:
+        raise RecoveryBlocked("Unsupported evidence version")
+    for k,v in expected.items():
         if evidence.get(k)!=v: raise RecoveryBlocked(f"Evidence {k} does not match immutable request")
 def workflow_identity():
     head=os.environ.get("RUNTIME_COMMIT_SHA","")

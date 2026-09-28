@@ -65,7 +65,7 @@ def reconcile_intent(youtube,intent,identity,channel):
 
 def upload_record(identity,intent,video_id,channel_id,association):
     if not VIDEO_ID.fullmatch(str(video_id or "")): raise RecoveryBlocked("Upload record requires valid video ID")
-    return {"evidence_version":1,"record_type":"upload",**identity,"youtube_video_id":str(video_id),"expected_channel_id":channel_id,"upload_body":intent["upload_body"],"association":association,"recorded_at":now(),"workflow":workflow_identity()}
+    return {"evidence_version":2,"record_type":"upload",**identity,"youtube_video_id":str(video_id),"expected_channel_id":channel_id,"upload_body":intent["upload_body"],"association":association,"recorded_at":now(),"workflow":workflow_identity()}
 
 def prepare_upload(state,request_path,request,identity,youtube):
     channel=authenticated_channel(youtube); stored_upload=state.load(evidence_path(identity["content_id"],"upload"))
@@ -87,7 +87,7 @@ def upload_new(state,request_path,request,identity,video_path,youtube):
         if found:
             rec=upload_record(identity,stored_intent.data,found["id"],channel["id"],"marker_reconciliation"); return state.create(evidence_path(identity["content_id"],"upload"),rec).data
         raise RecoveryBlocked("Upload intent exists but remote outcome is ambiguous; duplicate upload forbidden")
-    body=build_upload_body(request); intent={"evidence_version":1,"record_type":"intent",**identity,"expected_channel_id":channel["id"],"upload_body":body,"created_at":now(),"workflow":workflow_identity()}; stored_intent=state.create(evidence_path(identity["content_id"],"intent"),intent)
+    body=build_upload_body(request); intent={"evidence_version":2,"record_type":"intent",**identity,"expected_channel_id":channel["id"],"upload_body":body,"created_at":now(),"workflow":workflow_identity()}; stored_intent=state.create(evidence_path(identity["content_id"],"intent"),intent)
     if not stored_intent.created: raise RecoveryBlocked("Upload intent was not freshly created at the insert boundary; duplicate upload forbidden")
     found=reconcile_intent(youtube,stored_intent.data,identity,channel)
     if found:
