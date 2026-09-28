@@ -118,6 +118,44 @@ def analytics_report(params: dict, token: str):
     return get_json("https://youtubeanalytics.googleapis.com/v2/reports?" + urlencode(params), token)
 
 
+def analytics_report_all(
+    params: dict,
+    token: str,
+    report_fn=analytics_report,
+    page_size: int = 200,
+) -> dict:
+    size = int(page_size)
+    if size < 1:
+        raise ValueError("Analytics page size must be positive")
+    base = dict(params)
+    start = 1
+    combined = None
+    headers = None
+    rows = []
+    while True:
+        page_params = {**base, "startIndex": start, "maxResults": size}
+        page = report_fn(page_params, token)
+        if not isinstance(page, dict):
+            raise RuntimeError("Analytics page must be an object")
+        page_rows = page.get("rows") or []
+        if not isinstance(page_rows, list):
+            raise RuntimeError("Analytics rows must be an array")
+        if len(page_rows) > size:
+            raise RuntimeError("Analytics response exceeded requested page size")
+        page_headers = page.get("columnHeaders", [])
+        if combined is None:
+            combined = dict(page)
+            headers = page_headers
+        elif page_headers != headers:
+            raise RuntimeError("Analytics column headers changed between pages")
+        rows.extend(page_rows)
+        if len(page_rows) < size:
+            break
+        start += len(page_rows)
+    combined["rows"] = rows
+    return combined
+
+
 def reporting_json(method: str, path: str, token: str, body=None):
     data = json.dumps(body, separators=(",", ":")).encode() if body is not None else None
     req = Request(
@@ -174,7 +212,7 @@ def collect_optional_analytics_reports(token: str, now: datetime, report_fn=anal
             }
             if "views" in metrics:
                 params["sort"] = "-views"
-            report = report_fn(params, token)
+            report = analytics_report_all(params, token, report_fn)
             reports[name] = {
                 "dimensions": dimensions.split(","),
                 "metrics": metrics.split(","),
@@ -197,7 +235,7 @@ def collect_per_video_traffic_sources(
     for batch_rows in chunks(rows, 200):
         ids = [str(item["youtube_video_id"]) for item in batch_rows]
         try:
-            report = report_fn({
+            report = analytics_report_all({
                 "ids": "channel==MINE",
                 "startDate": start,
                 "endDate": end,
@@ -205,7 +243,7 @@ def collect_per_video_traffic_sources(
                 "dimensions": "video,insightTrafficSourceType",
                 "filters": "video==" + ",".join(ids),
                 "maxResults": len(ids) * 20,
-            }, token)
+            }, token, report_fn)
             for item in report_rows(report):
                 if str(item.get("insightTrafficSourceType", "")).upper() != "SHORTS":
                     continue
@@ -1043,7 +1081,7 @@ def run(planner_root: Path, warehouse_root: Path, collected_at: datetime | None 
 
     retention = collect_retention(
         current.get("videos", []), state, warehouse_root,
-        lambda params: analytics_report(params, token), collected_at,
+        lambda params: analytics_report_all(params, token), collected_at,
     )
     warehouse_files.extend(retention.files)
     warnings.extend(retention.warnings)

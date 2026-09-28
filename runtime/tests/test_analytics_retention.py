@@ -3,11 +3,123 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
+import analytics
 from analytics_retention import collect_retention, due_retention_checkpoints
 
 
 class RetentionTests(unittest.TestCase):
+    def test_run_injects_paginator_and_preserves_more_than_200_curve_rows(self):
+        headers = [{"name": "elapsedVideoTimeRatio"}, {"name": "audienceWatchRatio"}]
+
+        def api(params, _token):
+            if params["startIndex"] == 1:
+                return {"columnHeaders": headers, "rows": [[index / 200, 1.0] for index in range(200)]}
+            return {"columnHeaders": headers, "rows": [[1.0, 0.2]]}
+
+        paginator = analytics.analytics_report_all
+        current = {
+            "analytics_version": 3,
+            "collected_at": "2026-09-26T00:00:00Z",
+            "detailed_analytics_available": True,
+            "analytics_reports": {},
+            "warnings": [],
+            "videos": [{
+                "youtube_video_id": "aaaaaaaaaaa",
+                "age_hours": 72,
+                "publish_at": "2026-09-23T00:00:00Z",
+            }],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            planner = Path(tmp) / "planner"
+            warehouse = Path(tmp) / "warehouse"
+            (planner / "content").mkdir(parents=True)
+            context = planner / "content/context.json"
+            context.write_text("{}", encoding="utf-8")
+            with patch.object(analytics, "access_token", return_value="token"), patch.object(
+                analytics, "snapshot", return_value=current
+            ), patch.object(
+                analytics,
+                "sync_reporting",
+                return_value=SimpleNamespace(files=[], warnings=[]),
+            ), patch.object(
+                analytics,
+                "analytics_report_all",
+                side_effect=lambda params, token: paginator(params, token, api),
+            ) as paginate, patch.object(
+                analytics,
+                "analytics_report",
+                side_effect=lambda params, token: api(
+                    {**params, "startIndex": 1, "maxResults": 200}, token
+                ),
+            ), patch.object(
+                analytics, "build_summary", return_value={"generated_at": current["collected_at"], "warnings": []}
+            ), patch.object(
+                analytics, "planner_projection", return_value={}
+            ), patch.object(
+                analytics, "build_analytics_index", return_value={}
+            ), patch.object(
+                analytics, "rebuild_planner_context", return_value=context
+            ):
+                analytics.run(
+                    planner,
+                    warehouse,
+                    datetime(2026, 9, 26, tzinfo=timezone.utc),
+                )
+            payload = json.loads((warehouse / "retention/aaaaaaaaaaa/72h.json").read_text())
+
+        self.assertEqual(201, len(payload["rows"]))
+        self.assertTrue(paginate.called)
+
+    def test_core_metric_fallback_is_paginated(self):
+        headers = [{"name": "elapsedVideoTimeRatio"}, {"name": "audienceWatchRatio"}]
+
+        def api(params, _token):
+            if "startedWatching" in params["metrics"]:
+                return {"columnHeaders": headers, "rows": []}
+            if params["startIndex"] == 1:
+                return {"columnHeaders": headers, "rows": [[index / 200, 1.0] for index in range(200)]}
+            return {"columnHeaders": headers, "rows": [[1.0, 0.2]]}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = {"retention_checkpoints": {}}
+            result = collect_retention(
+                [{"youtube_video_id": "aaaaaaaaaaa", "age_hours": 72}],
+                state,
+                Path(tmp),
+                lambda params: analytics.analytics_report_all(params, "token", api),
+                datetime(2026, 9, 26, tzinfo=timezone.utc),
+            )
+            payload = json.loads(result.files[0].read_text())
+
+        self.assertEqual(201, len(payload["rows"]))
+
+    def test_page_two_failure_writes_no_curve_or_completed_checkpoint(self):
+        headers = [{"name": "elapsedVideoTimeRatio"}, {"name": "audienceWatchRatio"}]
+
+        def api(params, _token):
+            if params["startIndex"] == 1:
+                return {"columnHeaders": headers, "rows": [[index / 200, 1.0] for index in range(200)]}
+            raise RuntimeError("page two failed")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = {"retention_checkpoints": {}}
+            result = collect_retention(
+                [{"youtube_video_id": "aaaaaaaaaaa", "age_hours": 72}],
+                state,
+                root,
+                lambda params: analytics.analytics_report_all(params, "token", api),
+                datetime(2026, 9, 26, tzinfo=timezone.utc),
+            )
+
+            self.assertEqual([], result.files)
+            self.assertFalse((root / "retention/aaaaaaaaaaa/72h.json").exists())
+        self.assertEqual({}, state["retention_checkpoints"])
+        self.assertTrue(any("RuntimeError" in warning for warning in result.warnings))
+
     def test_only_due_checkpoint_is_selected_and_completed_is_skipped(self):
         videos = [
             {"youtube_video_id": "aaaaaaaaaaa", "age_hours": 80},

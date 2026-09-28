@@ -52,6 +52,78 @@ class CheckpointTests(unittest.TestCase):
 
 
 class OptionalAnalyticsTests(unittest.TestCase):
+    def test_analytics_paginator_collects_two_pages_with_fixed_offsets(self):
+        calls = []
+        headers = [{"name": "country"}, {"name": "views"}]
+
+        def report(params, token):
+            calls.append((dict(params), token))
+            if params["startIndex"] == 1:
+                return {"kind": "analytics#resultTable", "columnHeaders": headers, "rows": [["US", i] for i in range(200)]}
+            return {"columnHeaders": headers, "rows": [["SG", 201]]}
+
+        result = analytics.analytics_report_all(
+            {"ids": "channel==MINE", "maxResults": 7, "startIndex": 99},
+            "token",
+            report,
+        )
+
+        self.assertEqual([1, 201], [call[0]["startIndex"] for call in calls])
+        self.assertEqual([200, 200], [call[0]["maxResults"] for call in calls])
+        self.assertEqual("token", calls[1][1])
+        self.assertEqual("analytics#resultTable", result["kind"])
+        self.assertEqual(headers, result["columnHeaders"])
+        self.assertEqual(201, len(result["rows"]))
+        self.assertEqual(["SG", 201], result["rows"][-1])
+
+    def test_analytics_paginator_probes_after_exact_full_page(self):
+        starts = []
+
+        def report(params, _token):
+            starts.append(params["startIndex"])
+            rows = [[index] for index in range(200)] if params["startIndex"] == 1 else []
+            return {"columnHeaders": [{"name": "views"}], "rows": rows}
+
+        result = analytics.analytics_report_all({}, "token", report)
+
+        self.assertEqual([1, 201], starts)
+        self.assertEqual(200, len(result["rows"]))
+
+    def test_analytics_paginator_accepts_omitted_first_rows(self):
+        result = analytics.analytics_report_all(
+            {}, "token", lambda _params, _token: {"columnHeaders": [{"name": "views"}]}
+        )
+        self.assertEqual([], result["rows"])
+
+    def test_analytics_paginator_rejects_header_drift(self):
+        def report(params, _token):
+            if params["startIndex"] == 1:
+                return {"columnHeaders": [{"name": "views"}], "rows": [[index] for index in range(200)]}
+            return {"columnHeaders": [{"name": "likes"}], "rows": [[1]]}
+
+        with self.assertRaisesRegex(RuntimeError, "headers"):
+            analytics.analytics_report_all({}, "token", report)
+
+    def test_analytics_paginator_rejects_overfull_page(self):
+        def report(_params, _token):
+            return {"columnHeaders": [{"name": "views"}], "rows": [[index] for index in range(201)]}
+
+        with self.assertRaisesRegex(RuntimeError, "page size"):
+            analytics.analytics_report_all({}, "token", report)
+
+    def test_analytics_paginator_raises_without_returning_partial_page(self):
+        calls = []
+
+        def report(params, _token):
+            calls.append(params["startIndex"])
+            if params["startIndex"] == 1:
+                return {"columnHeaders": [{"name": "views"}], "rows": [[index] for index in range(200)]}
+            raise RuntimeError("page two failed")
+
+        with self.assertRaisesRegex(RuntimeError, "page two failed"):
+            analytics.analytics_report_all({}, "token", report)
+        self.assertEqual([1, 201], calls)
+
     def test_missing_data_api_counters_remain_null(self):
         original = analytics.youtube_data
         analytics.youtube_data = lambda *_args: {"items": [{"id": "aaaaaaaaaaa", "statistics": {}, "contentDetails": {}}]}
@@ -127,6 +199,73 @@ class OptionalAnalyticsTests(unittest.TestCase):
         self.assertEqual(result["aaaaaaaaaaa"]["shorts_source_views"], 80)
         self.assertEqual(result["aaaaaaaaaaa"]["shorts_source_engaged_view_rate_percentage"], 55.0)
         self.assertNotIn("shown_in_feed", json.dumps(result))
+
+    def test_optional_reports_include_geography_and_device_page_two(self):
+        def report_fn(params, _token):
+            dimensions = params["dimensions"].split(",")
+            metrics = params["metrics"].split(",")
+            headers = [{"name": name} for name in dimensions + metrics]
+            start = params.get("startIndex", 1)
+            if params["dimensions"].startswith("country"):
+                if start == 1:
+                    return {"columnHeaders": headers, "rows": [["ZZ", "SHORTS", 0, 0, 0, 0, 0] for _ in range(200)]}
+                return {"columnHeaders": headers, "rows": [["US", "SHORTS", 123, 80, 10, 5, 60]]}
+            if params["dimensions"].startswith("deviceType"):
+                if start == 1:
+                    return {"columnHeaders": headers, "rows": [["UNKNOWN", "UNKNOWN", "SHORTS", 0, 0, 0, 0, 0] for _ in range(200)]}
+                return {"columnHeaders": headers, "rows": [["MOBILE", "ANDROID", "SHORTS", 75, 50, 8, 6, 70]]}
+            return {"columnHeaders": headers, "rows": []}
+
+        reports, warnings = analytics.collect_optional_analytics_reports(
+            "token", datetime(2026, 9, 26, tzinfo=timezone.utc), report_fn
+        )
+
+        self.assertEqual([], warnings)
+        self.assertTrue(any(row["country"] == "US" for row in reports["geography"]["rows"]))
+        self.assertTrue(any(row["deviceType"] == "MOBILE" for row in reports["device_os"]["rows"]))
+
+    def test_optional_page_two_failure_discards_only_failed_dataset(self):
+        def report_fn(params, _token):
+            names = params["dimensions"].split(",") + params["metrics"].split(",")
+            headers = [{"name": name} for name in names]
+            start = params.get("startIndex", 1)
+            if params["dimensions"].startswith("country"):
+                if start > 1:
+                    raise RuntimeError("second page unavailable")
+                return {"columnHeaders": headers, "rows": [["ZZ", "SHORTS", 0, 0, 0, 0, 0] for _ in range(200)]}
+            return {"columnHeaders": headers, "rows": []}
+
+        reports, warnings = analytics.collect_optional_analytics_reports(
+            "token", datetime(2026, 9, 26, tzinfo=timezone.utc), report_fn
+        )
+
+        self.assertNotIn("geography", reports)
+        self.assertIn("device_os", reports)
+        self.assertTrue(any("geography" in warning for warning in warnings))
+
+    def test_per_video_shorts_source_includes_page_two(self):
+        headers = [
+            {"name": "video"},
+            {"name": "insightTrafficSourceType"},
+            {"name": "views"},
+            {"name": "engagedViews"},
+            {"name": "estimatedMinutesWatched"},
+        ]
+
+        def report_fn(params, _token):
+            if params.get("startIndex", 1) == 1:
+                return {"columnHeaders": headers, "rows": [["aaaaaaaaaaa", "YT_SEARCH", 1, 1, 1] for _ in range(200)]}
+            return {"columnHeaders": headers, "rows": [["aaaaaaaaaaa", "SHORTS", 80, 44, 12]]}
+
+        result, warnings = analytics.collect_per_video_traffic_sources(
+            [{"youtube_video_id": "aaaaaaaaaaa"}],
+            "token",
+            datetime(2026, 9, 26, tzinfo=timezone.utc),
+            report_fn,
+        )
+
+        self.assertEqual([], warnings)
+        self.assertEqual(80, result["aaaaaaaaaaa"]["shorts_source_views"])
 
 
 class DerivedArtifactTests(unittest.TestCase):
