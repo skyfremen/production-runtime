@@ -1,10 +1,11 @@
 import json
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.error import HTTPError
 
+import analytics_reporting as reporting
 from analytics_reporting import sync_reporting
 
 
@@ -55,6 +56,109 @@ class FakeReportingApi:
 
 
 class ReportingSyncTests(unittest.TestCase):
+    def test_job_status_waiting_active_and_stale_boundaries(self):
+        now = datetime(2026, 9, 27, 0, 0, tzinfo=timezone.utc)
+        statuses = {}
+        waiting = reporting.update_job_status(
+            "channel_waiting",
+            {"id": "job-waiting", "createTime": "2026-09-26T00:00:00Z"},
+            [],
+            statuses,
+            now,
+        )
+        self.assertEqual("waiting_for_first_report", waiting["status"])
+        self.assertEqual(0, waiting["available_report_count"])
+        self.assertNotIn("first_report_observed_at", waiting)
+
+        active = reporting.update_job_status(
+            "channel_waiting",
+            {"id": "job-waiting", "createTime": "2026-09-26T00:00:00Z"},
+            [{"id": "report-1", "endTime": "2026-09-26T23:00:00Z"}],
+            statuses,
+            now + timedelta(hours=1),
+        )
+        self.assertEqual("active", active["status"])
+        self.assertEqual(1, active["available_report_count"])
+        self.assertEqual("2026-09-26T23:00:00Z", active["latest_report_end_time"])
+        self.assertEqual("2026-09-27T01:00:00Z", active["first_report_observed_at"])
+
+        first = now - timedelta(hours=47, minutes=59, seconds=59)
+        statuses["channel_boundary"] = {"first_observed_at": reporting.iso_z(first)}
+        before = reporting.update_job_status(
+            "channel_boundary", {"id": "job-boundary"}, [], statuses, now
+        )
+        self.assertEqual("waiting_for_first_report", before["status"])
+        exact = reporting.update_job_status(
+            "channel_boundary",
+            {"id": "job-boundary"},
+            [],
+            statuses,
+            now + timedelta(seconds=1),
+        )
+        self.assertEqual("stale", exact["status"])
+
+    def test_multiple_stale_jobs_emit_one_bounded_warning(self):
+        report_types = [f"channel_type_{index:02d}" for index in range(12)]
+
+        def api(method, path, body=None):
+            if path.startswith("reportTypes"):
+                return {"reportTypes": [{"id": item, "systemManaged": False} for item in report_types]}
+            if path == "jobs?pageSize=100":
+                return {
+                    "jobs": [
+                        {
+                            "id": f"job-{index:02d}",
+                            "reportTypeId": item,
+                            "createTime": "2026-09-20T00:00:00Z",
+                        }
+                        for index, item in enumerate(report_types)
+                    ]
+                }
+            if path.endswith("/reports?pageSize=100"):
+                return {"reports": []}
+            raise AssertionError((method, path, body))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result = sync_reporting(
+                "token",
+                Path(tmp),
+                {"jobs": {}},
+                {"downloaded_reports": {}},
+                api,
+                lambda _url: b"",
+                datetime(2026, 9, 27, tzinfo=timezone.utc),
+            )
+
+        stale_warnings = [warning for warning in result.warnings if "stale" in warning.casefold()]
+        self.assertEqual(1, len(stale_warnings))
+        self.assertIn("12", stale_warnings[0])
+        self.assertIn("2 omitted", stale_warnings[0])
+        self.assertIn(report_types[9], stale_warnings[0])
+        self.assertNotIn(report_types[10], stale_warnings[0])
+
+    def test_report_listing_failure_preserves_previous_status(self):
+        previous = {
+            "status": "active",
+            "first_observed_at": "2026-09-20T00:00:00Z",
+            "last_checked_at": "2026-09-26T00:00:00Z",
+            "available_report_count": 3,
+            "latest_report_end_time": "2026-09-25T00:00:00Z",
+            "first_report_observed_at": "2026-09-21T00:00:00Z",
+        }
+        jobs = {"jobs": {}, "job_status": {"channel_device_os_a3": dict(previous)}}
+        with tempfile.TemporaryDirectory() as tmp:
+            api = FakeReportingApi(fail_reports_for="job-device")
+            sync_reporting(
+                "token",
+                Path(tmp),
+                jobs,
+                {"downloaded_reports": {}},
+                api.json,
+                api.bytes,
+                datetime(2026, 9, 27, tzinfo=timezone.utc),
+            )
+        self.assertEqual(previous, jobs["job_status"]["channel_device_os_a3"])
+
     def test_discovery_http_error_reports_safe_status_and_reason(self):
         def forbidden(_method, _path, _body=None):
             raise HTTPError("https://example.invalid", 403, "Forbidden", {}, None)

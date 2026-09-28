@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import quote
@@ -17,6 +17,53 @@ class ReportingSyncResult:
 
 def iso_z(value: datetime) -> str:
     return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _instant(value) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(timezone.utc)
+
+
+def update_job_status(
+    report_type_id: str,
+    job: dict,
+    reports: list[dict],
+    statuses: dict,
+    collected_at: datetime,
+) -> dict:
+    checked_at = collected_at.astimezone(timezone.utc)
+    previous = statuses.get(report_type_id)
+    previous = previous if isinstance(previous, dict) else {}
+    candidates = [
+        value
+        for value in (_instant(previous.get("first_observed_at")), _instant(job.get("createTime")))
+        if value is not None
+    ]
+    first_observed = min(candidates) if candidates else checked_at
+    valid_reports = [report for report in reports if isinstance(report, dict)]
+    end_times = [str(report.get("endTime")) for report in valid_reports if _instant(report.get("endTime"))]
+    status = "active" if valid_reports else (
+        "stale" if checked_at - first_observed >= timedelta(hours=48) else "waiting_for_first_report"
+    )
+    result = {
+        "status": status,
+        "first_observed_at": iso_z(first_observed),
+        "last_checked_at": iso_z(checked_at),
+        "available_report_count": len(valid_reports),
+        "latest_report_end_time": max(end_times) if end_times else None,
+    }
+    first_report = previous.get("first_report_observed_at")
+    if valid_reports:
+        result["first_report_observed_at"] = first_report or iso_z(checked_at)
+    elif first_report:
+        result["first_report_observed_at"] = first_report
+    statuses[report_type_id] = result
+    return result
 
 
 def write_json(path: Path, value) -> None:
@@ -86,6 +133,7 @@ def sync_reporting(
     jobs_manifest.setdefault("analytics_version", 3)
     jobs_manifest.setdefault("jobs", {})
     jobs_manifest.setdefault("report_types", {})
+    jobs_manifest.setdefault("job_status", {})
     collection_state.setdefault("downloaded_reports", {})
 
     try:
@@ -153,6 +201,7 @@ def sync_reporting(
         except Exception as exc:
             warnings.append(f"Optional Reporting reports for {job_id} unavailable: {type(exc).__name__}")
             continue
+        update_job_status(report_type_id, job, reports, jobs_manifest["job_status"], collected_at)
         for report in reports:
             report_id = str(report.get("id") or "")
             download_url = str(report.get("downloadUrl") or "")
@@ -195,6 +244,20 @@ def sync_reporting(
         warnings.append(
             f"Reporting download budget reached after {downloads} new reports; "
             f"{deferred} reports deferred to later runs"
+        )
+
+    stale = sorted(
+        report_type_id
+        for report_type_id, status in jobs_manifest["job_status"].items()
+        if isinstance(status, dict) and status.get("status") == "stale"
+    )
+    if stale:
+        shown = stale[:10]
+        omitted = len(stale) - len(shown)
+        suffix = f"; {omitted} omitted" if omitted else ""
+        warnings.append(
+            f"Reporting jobs stale with no available reports: {len(stale)} "
+            f"({', '.join(shown)}{suffix})"
         )
 
     return ReportingSyncResult(files, warnings)
