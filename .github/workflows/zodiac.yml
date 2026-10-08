@@ -115,7 +115,7 @@ jobs:
           retention-days: 14
           compression-level: 0
           overwrite: true
-      - name: Record result and rebuild context on current main
+      - name: Record verified result on current main
         if: steps.prior.outputs.complete != 'true'
         run: |
           set -euo pipefail
@@ -125,9 +125,12 @@ jobs:
             git -C .state fetch origin main
             git -C .state reset --hard origin/main
             python -m zodiac.lifecycle ingest-result --root "$GITHUB_WORKSPACE/.state" --result "$RUNNER_TEMP/zodiac-artifact/result.json"
-            git -C .state add content/results content/context.json
+            # Reuse pinned provenance validation, but leave durable context to
+            # the private result workflow. This also supports older requests.
+            git -C .state restore content/context.json
+            git -C .state add content/results
             if git -C .state diff --cached --quiet; then exit 0; fi
-            git -C .state commit -m '[zodiac result] record verified execution and refresh context'
+            git -C .state commit -m '[zodiac result] record verified execution'
             if git -C .state push origin HEAD:main; then exit 0; fi
           done
           echo '::error::ZODIAC_RESULT_PUSH_RETRIES_EXHAUSTED'
@@ -137,5 +140,5 @@ jobs:
           if [[ '${{ steps.prior.outputs.complete }}' == 'true' ]]; then
             echo "Execution $EXECUTION_ID already has a verified result; no new artifact was produced." >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "Execution $EXECUTION_ID: 6-second MP4 and QC artifact saved in production-runtime; result recorded in zodiac-workflow." >> "$GITHUB_STEP_SUMMARY"
+            echo "Execution $EXECUTION_ID: 6-second MP4 and QC artifact saved in production-runtime; result recorded in zodiac-workflow. Its separate Ingest Production Result workflow refreshes planning context." >> "$GITHUB_STEP_SUMMARY"
           fi
