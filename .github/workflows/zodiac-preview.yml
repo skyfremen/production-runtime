@@ -10,7 +10,7 @@ jobs:
   preview:
     if: github.repository == 'skyfremen/production-runtime' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    environment: zodiac-exec
+    environment: exec
     timeout-minutes: 15
     env:
       SOURCE_SHA: 1320af185f38f4d1d110e031b97fa76b044685e2
