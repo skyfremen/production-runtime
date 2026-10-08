@@ -183,6 +183,16 @@ def check_render_prerequisites(creative):
     guard(shutil.which("ffmpeg") and shutil.which("ffprobe"), "ffmpeg and ffprobe required")
     for s in creative["timed_scenes"]:
         guard(s["kind"] in SCENE_KINDS, "unsupported scene kind")
+    timeline = creative["timed_scenes"]
+    last = 0.0
+    for scene in timeline:
+        guard(scene["kind"] in SCENE_KINDS, "unsupported scene kind")
+        guard(abs(float(scene["start"])-last) <= .01 and
+              float(scene["end"]) > float(scene["start"]),
+              "broken scene timeline")
+        last = float(scene["end"])
+    guard(abs(last-float(creative["duration_seconds"])) <= 1/FPS,
+          "incomplete timed plan")
     guard(creative["timed_scenes"][-1]["kind"] == "hold", "no final full-answer hold")
     guard(creative["timed_scenes"][0]["kind"] == "hook", "no immediate first-frame hook")
     guard(creative["target_identity_and_coverage"]["results"],
@@ -227,6 +237,7 @@ def render_one(creative, output, palette_index=0):
         proc.stdin.close()
         err = proc.stderr.read()
         code = proc.wait(timeout=120)
+        proc.stderr.close()
         guard(code == 0, "ffmpeg render failed: " + err.decode("utf8", "replace")[-500:])
         guard(tmp.exists() and tmp.stat().st_size > 10000, "empty/corrupt MP4")
         tmp.replace(output)
@@ -237,6 +248,8 @@ def render_one(creative, output, palette_index=0):
         except (OSError, ValueError): pass
         try: proc.wait(timeout=5)
         except BaseException: pass
+        try: proc.stderr.close()
+        except (OSError, ValueError): pass
         tmp.unlink(missing_ok=True)
         raise
     return {"path": str(output), "frames": frames, "duration_seconds": frames/FPS}

@@ -73,12 +73,19 @@ class RenderTests(unittest.TestCase):
                              video["sha256"])
 
     def test_missing_duration_rejected_pre_encoding(self):
-        e=envelope(1)
-        e["requests"][0]["creative"]["timed_scenes"][-1]["end"]=9.5
-        c=e["requests"][0]["creative"]
-        with self.assertRaisesRegex(HandoffRejected, "incomplete|final|timeline"):
-            check_render_prerequisites({**c, "timed_scenes":[
-                *c["timed_scenes"][:-1],{**c["timed_scenes"][-1], "kind":"unknown"}]})
+        e = envelope(1)
+        c = e["requests"][0]["creative"]
+        c["timed_scenes"][-1]["end"] = 9.5
+        with self.assertRaisesRegex(HandoffRejected, "incomplete timed plan"):
+            check_render_prerequisites(c)
+
+    def test_corrupt_scene_kind_rejected(self):
+        e = envelope(1)
+        c = e["requests"][0]["creative"]
+        c["timed_scenes"][-1]["kind"] = "unknown"
+        with self.assertRaisesRegex(HandoffRejected, "unsupported scene kind"):
+            check_render_prerequisites(c)
+
 
 if __name__=="__main__":
     unittest.main()
