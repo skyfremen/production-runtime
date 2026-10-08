@@ -1,34 +1,24 @@
-# Isolated Zodiac runtime lane — Step 7
+# Zodiac renderer — offline MP4 artifact lane (Step 8)
 
-This directory accepts the *private* `skyfremen/zodiac-workflow` planning handoff. It is deliberately separate from the Wacky Dramas V2 entrypoint (`runtime/core.py`), production workflow (`.github/workflows/single.yml`), output pipeline, YouTube upload code, tokens, state, channel identity and analytics.
+This *independent* runtime lane now contains:
+- `entrypoint.py`: read-only strict Zodiac plan intake.
+- `renderer.py`: procedural silent animated frames with readable complete results; encodes H.264 MP4 at 1080×1920, 30 fps.
+- `artifacts.py`: checks real MP4 via ffprobe, complete decode, black-frame detection, and actual extracted encoded-frame screenshots/contrast; creates `videos/`, `previews/`, `manifest.json`, and `qc-report.json` **only after all requested videos pass**.
 
-**Currently validation-only.** The next Step 8 deliverable is a Zodiac-only renderer that writes MP4 files to **private GitHub Actions artifacts**, never YouTube. Rendering and artifact delivery are not yet implemented. This directory contains **no uploader, dispatcher, scheduler, OAuth, video renderer, credential fallback or external network request**. The presence of a valid handoff never means an MP4 has been produced.
+**This repo never uploads an MP4 anywhere.** Its sole CLI output is a local directory; a separate **private** `skyfremen/zodiac-workflow` GitHub Actions workflow uses `actions/upload-artifact` to deliver that directory to the user. No Google OAuth, channel ID, YouTube API, publishing schedule or Wacky credentials are required or used. Do not call the existing `runtime/core.py` or production workflows.
 
-## Contract
+Requires Python 3.11+, Pillow, local `ffmpeg` and `ffprobe`, and DejaVuSans fonts (available on Ubuntu GitHub runners). Run from the repo root:
 
-- A full, exact 40-character planning commit SHA; source repository pinned to `skyfremen/zodiac-workflow`.
-- Contract `wacky-astrology-handoff-v1`, lane `zodiac`, visual spec 1080×1920/30fps, no narration.
-- Exactly N editorially approved requests, N × 15 premises recorded as a pool count, with isolated `za-` concept IDs, scores and SHA-256 hashes.
-- Re-check readable, complete sign/month assignment, required payoff and muted scenes. This is *structural validation*, not real mobile visual QA or proof of ownership/licensing.
-- `render`, `upload`, `publish`, and `schedule` permissions must all be strictly `false`.
-- Known Wacky production credentials in the process environment are rejected.
-- The output is an isolated validation record with `ready_for_render=false`, `verified_video_files=[]`, and all execution flags disabled.
-- A checksum is an integrity detection mechanism, **not cryptographic authentication or proof of a GitHub source commit**. The private workflow pins and checks the actual repository checkout separately.
+    PYTHONPATH=runtime python runtime/zodiac/artifacts.py --handoff /tmp/private-zodiac-handoff.json --output /tmp/private-zodiac-preview
 
-## CLI
+The bridge revalidates the signed-by-content editorial envelope (a SHA256 digest is *not authentication*), rejects Wacky production credentials and malformed plans, performs dry-run text fitting, renders N MP4s, and writes outputs atomically. Artifacts are retained only in the private caller's GitHub Actions storage; no private planning data or videos are committed to this public repository.
 
-    PYTHONPATH=runtime python runtime/zodiac/entrypoint.py --input /tmp/zodiac-handoff.json --output /tmp/zodiac-validation.json
+### Media QA caveats
 
-Use only the output of `zodiac_handoff.py` in the private planning repo. A malformed or altered handoff fails closed with exit 2 and no output file written.
+Automated checks verify text bounds, required data presence, timing, video decode, stream dimensions, frame rate, soundtrack absence and extracted-frame contrast. Actual phone viewing, perceived font readability, visual humor and **loop quality** still require human review (Step 10). The last 0.2 seconds visually blend to the opening to avoid a hard black cut. Long mappings that cannot physically fit in the layout **fail closed** instead of being shrunk to unreadable font sizes.
 
-The public `production-runtime` repository must **never store private Zodiac scripts, drafts, plans, tokens, results or identity secrets**. The private Zodiac workflow checks out this public repository at a pinned SHA and invokes the new offline lane within the private runner. Cross-repo tests use fictional fixtures without private content.
+### Public CI (fictional only)
 
-Upload authorization can only be added in a separate later task after Zodiac channel creation, independent OAuth, explicit target-channel-ID validation and private test approval.
+The dedicated `Zodiac Render Verification (Offline)` workflow uses a synthetic two-choice Zodiac mapping, generates a real 1080×1920 silent 30-fps MP4 and validates it with ffmpeg. The existing `Verify V2` and Wacky production jobs remain untouched.
 
-## Step 8 target: downloadable video artifacts only
-
-The next implementation should render **silent vertical 1080×1920, 30-fps MP4s** from the approved private Zodiac handoff; run ffprobe/ffmpeg and actual rendered-frame quality checks; then use the *private* `zodiac-workflow` GitHub Actions workflow to attach passing MP4(s), per-concept manifest and QC evidence using `actions/upload-artifact`. Present a run-summary download link. A 14-day artifact retention target is proposed, within repository limits. Never commit MP4 or private creative material to this public repository.
-
-Treat this as the end of the pipeline for now. **No YouTube uploads, no channel creation, no OAuth, no publish slots and no schedule.** Do not modify the existing Wacky production workflow or call `runtime/core.py`, `runtime/output/execute.py`, the existing transport/transfer/upload helpers or any YouTube API from Zodiac. No Wacky credentials may be inherited. All YouTube steps remain deferred.
-
-This paragraph is a specification for a future change, **not evidence that a renderer or video artifact already exists**.
+To create the **downloadable private GitHub Actions artifact**, run the `Zodiac Visual Handoff (No Upload)` workflow in the private Zodiac planning repo with a reviewed approved draft.

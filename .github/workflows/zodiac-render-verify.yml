@@ -1,0 +1,42 @@
+name: Zodiac Render Verification (Offline)
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'runtime/zodiac/**'
+      - 'runtime/tests/test_zodiac_render.py'
+      - '.github/workflows/zodiac-render-verify.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  render-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Prepare strictly local renderer prerequisites
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check 'Pillow>=10,<13'
+          command -v ffmpeg
+          command -v ffprobe
+          test -f /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf
+          test -f /usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf
+      - name: Run isolated Zodiac real-media tests using fictional data
+        env:
+          PYTHONPATH: runtime
+        run: |
+          python -m compileall -q runtime/zodiac
+          python runtime/tests/test_zodiac_render.py -v
+      - name: Assert existing Wacky entrypoint remains unchanged by Zodiac lane
+        run: |
+          git diff --quiet HEAD^ HEAD -- runtime/core.py runtime/engine runtime/output .github/workflows/single.yml
+          echo "Existing Wacky upload entrypoints unchanged."
