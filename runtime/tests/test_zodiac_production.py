@@ -10,6 +10,20 @@ from test_zodiac_flow import fixture, save, NOW, SOURCE, RUNTIME
 from zodiac.lifecycle import finalize, load
 
 class ProductionTests(unittest.TestCase):
+    def test_production_is_runtime_owned_with_fixed_private_state(self):
+        source=(Path(__file__).resolve().parents[2]/'.github/workflows/zodiac.yml').read_text()
+        self.assertIn('workflow_dispatch:',source)
+        self.assertNotIn('workflow_call:',source)
+        self.assertIn("github.repository == 'skyfremen/production-runtime'",source)
+        self.assertIn('SOURCE_REPOSITORY: skyfremen/zodiac-workflow',source)
+        self.assertIn('repository: skyfremen/zodiac-workflow',source)
+        self.assertIn('token: ${{ secrets.ZODIAC_STATE_TOKEN }}',source)
+        self.assertIn('--repository "$SOURCE_REPOSITORY"',source)
+        self.assertIn('uses: actions/upload-artifact@v4',source)
+        self.assertNotIn('--repository "$GITHUB_REPOSITORY"',source)
+        self.assertNotIn('secrets.RUNTIME_AUTH_',source)
+        self.assertNotIn('secrets.PRIVATE_STATE_TOKEN',source)
+
     def test_artifact_can_be_replaced_on_result_write_retry(self):
         source=(Path(__file__).resolve().parents[2]/'.github/workflows/zodiac.yml').read_text()
         self.assertIn('overwrite: true',source)
