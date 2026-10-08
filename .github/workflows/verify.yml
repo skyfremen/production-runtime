@@ -6,8 +6,7 @@ on:
     paths:
       - 'runtime/**'
       - 'base/**'
-      - '.github/workflows/single.yml'
-      - '.github/workflows/verify.yml'
+      - '.github/workflows/**'
   workflow_dispatch:
 
 permissions:
