@@ -17,8 +17,10 @@ The bridge revalidates the signed-by-content editorial envelope (a SHA256 digest
 
 Automated checks verify text bounds, required data presence, timing, video decode, stream dimensions, frame rate, soundtrack absence and extracted-frame contrast. Actual phone viewing, perceived font readability, visual humor and **loop quality** still require human review (Step 10). The last 0.2 seconds visually blend to the opening to avoid a hard black cut. Long mappings that cannot physically fit in the layout **fail closed** instead of being shrunk to unreadable font sizes.
 
-### Public CI (fictional only)
+### Verification and review
 
-The dedicated `Zodiac Render Verification (Offline)` workflow uses a synthetic two-choice Zodiac mapping, generates a real 1080×1920 silent 30-fps MP4 and validates it with ffmpeg. The existing `Verify V2` and Wacky production jobs remain untouched.
+The existing public `Verify V2` checks continue to run unchanged. Extra optional Pillow-based Zodiac media tests are run **in the private `zodiac-workflow` CI**, where they exercise a genuine 1080×1920, 30-fps H.264 encode and fail-closed negative cases using fictional input. This avoids producing or uploading private creative assets in the public runtime repository.
 
-To create the **downloadable private GitHub Actions artifact**, run the `Zodiac Visual Handoff (No Upload)` workflow in the private Zodiac planning repo with a reviewed approved draft.
+For reviewed Zodiac episodes, the private, manual **Zodiac MP4 Preview Artifact (No YouTube)** workflow validates the complete approved draft, pins this runtime at an immutable commit SHA, runs `artifacts.py`, and delivers passing MP4s in a **private 14-day GitHub Actions artifact**. No media is committed to either repository. The private Actions run ID and artifact name provide the download link.
+
+A real synthetic-video artifact was successfully generated and uploaded in the private repo at https://github.com/skyfremen/zodiac-workflow/actions/runs/37721974139; it is a technical demo only. Human quality review and an approved actual episode remain separate steps.
