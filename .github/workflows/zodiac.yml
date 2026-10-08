@@ -12,7 +12,7 @@ jobs:
   produce:
     if: github.repository == 'skyfremen/production-runtime' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    environment: zodiac-exec
+    environment: exec
     timeout-minutes: 30
     concurrency:
       group: zodiac-execution-${{ inputs.execution_id }}
