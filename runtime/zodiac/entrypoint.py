@@ -20,6 +20,7 @@ MAX_INPUT_BYTES = 2_000_000
 FAMILIES = frozenset({
     "find_your_sign", "angel_vs_devil", "zodiac_ranking", "birth_month_hunt",
     "relationship_matching", "choose_before_reveal",
+    "zodiac_traits", "element_comparison",
 })
 SIGNS = frozenset(
     "aries taurus gemini cancer leo virgo libra scorpio sagittarius capricorn aquarius pisces".split()
@@ -112,7 +113,64 @@ def validate_request(item):
         check(kind == "month" and coverage.get("universal") is True,
               "universal month promise unfulfilled")
     scenes = creative.get("timed_scenes")
-    check(isinstance(scenes, list) and len(scenes) >= 3, "timed scenes missing")
+    display_mode = creative.get("display_mode")
+    check(display_mode in (None, "full_screen_list"), "unknown display mode")
+    if display_mode == "full_screen_list":
+        check(creative.get("list_style") in {
+            "sign_results", "ranking", "grouped_elements", "trait_matches"
+        }, "invalid list template")
+        check(isinstance(scenes, list) and len(scenes) == 1,
+              "one full-screen list scene required")
+        scene = scenes[0]
+        check(isinstance(scene, dict) and scene.get("kind") == "full_list" and
+              scene.get("start") == 0 and scene.get("end") == duration and
+              type(scene.get("stable_seconds")) in (int,float) and
+              scene["stable_seconds"] >= duration-.25 and
+              type(scene.get("reading_load_words")) is int and
+              scene["reading_load_words"] >= 1,
+              "list must remain stable for complete video")
+        texts = scene.get("visible_text")
+        check(isinstance(texts, list) and
+              all(plain(s) for s in texts) and
+              norm(creative["task_prompt"]) in norm(" ".join(texts)),
+              "first-frame title missing")
+        for identity, result in results.items():
+            check(norm(identity+" "+result) in norm(" ".join(texts)),
+                  "first-frame list entry missing: "+identity)
+        check(2 <= len(identities) <= 18, "list size not readable")
+        check(duration >= 6, "list needs reading time")
+        check(not (creative["list_style"] == "grouped_elements" and
+                   {norm(s) for s in identities} != SIGNS),
+              "element grouping needs every sign")
+    else:
+        check(isinstance(scenes, list) and len(scenes) >= 3, "timed scenes missing")
+    if display_mode != "full_screen_list":
+        _check_legacy_scenes(creative, scenes, duration, results)
+    # The remaining fields remain binding for both full-screen and legacy layouts.
+    scores = creative.get("score_breakdown")
+    check(isinstance(scores, dict) and set(scores) == set(SCORES) and
+          all(type(scores[k]) is int and 0 <= scores[k] <= upper for k, upper in SCORES.items()) and
+          sum(scores.values()) >= 78, "low or malformed scores")
+    options = creative.get("opening_variant_decision")
+    check(isinstance(options, dict) and isinstance(options.get("options"), list) and
+          len(options["options"]) in (1, 2, 3) and
+          type(options.get("selected_index")) is int and
+          0 <= options["selected_index"] < len(options["options"]), "opening audit missing")
+    selected = options["options"][options["selected_index"]]
+    check(isinstance(selected, dict) and plain(selected.get("promise")) and
+          norm(selected["promise"]) in task, "opening promise unfulfilled")
+    feasibility = creative.get("render_feasibility")
+    check(isinstance(feasibility, dict) and
+          all(feasibility.get(k) is True for k in
+              ("phone_readable", "muted", "complete_first_view", "assets_owned_or_licensed")) and
+          plain(feasibility.get("timing_reason")), "editorial feasibility evidence missing")
+    return {"concept_id": cid, "editorial": creative,
+            "duration_seconds": duration, "status": "step7_validated_handoff_only"}
+
+
+
+def _check_legacy_scenes(creative, scenes, duration, results):
+    task = norm(creative["task_prompt"])
     t = 0.
     kinds = []
     for scene in scenes:
@@ -141,26 +199,6 @@ def validate_request(item):
                   target in norm(" ".join(sc["visible_text"])) and
                   sc["stable_seconds"] >= min_hold for sc in scenes[1:]),
               "identity result missing or unreadable: " + str(identity))
-    scores = creative.get("score_breakdown")
-    check(isinstance(scores, dict) and set(scores) == set(SCORES) and
-          all(type(scores[k]) is int and 0 <= scores[k] <= upper for k, upper in SCORES.items()) and
-          sum(scores.values()) >= 78, "low or malformed scores")
-    options = creative.get("opening_variant_decision")
-    check(isinstance(options, dict) and isinstance(options.get("options"), list) and
-          len(options["options"]) in (1, 2, 3) and
-          type(options.get("selected_index")) is int and
-          0 <= options["selected_index"] < len(options["options"]), "opening audit missing")
-    selected = options["options"][options["selected_index"]]
-    check(isinstance(selected, dict) and plain(selected.get("promise")) and
-          norm(selected["promise"]) in task, "opening promise unfulfilled")
-    feasibility = creative.get("render_feasibility")
-    check(isinstance(feasibility, dict) and
-          all(feasibility.get(k) is True for k in
-              ("phone_readable", "muted", "complete_first_view", "assets_owned_or_licensed")) and
-          plain(feasibility.get("timing_reason")), "editorial feasibility evidence missing")
-    return {"concept_id": cid, "editorial": creative,
-            "duration_seconds": duration, "status": "step7_validated_handoff_only"}
-
 
 def validate_envelope(envelope):
     check(isinstance(envelope, dict) and set(envelope) == ROOT_FIELDS,

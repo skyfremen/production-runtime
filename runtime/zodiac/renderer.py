@@ -18,6 +18,10 @@ import sys
 import tempfile
 from PIL import Image, ImageDraw, ImageFont
 try:
+    from . import list_renderer
+except ImportError:
+    import list_renderer
+try:
     from .entrypoint import HandoffRejected, run as validate_input
 except ImportError:
     from entrypoint import HandoffRejected, run as validate_input
@@ -112,6 +116,8 @@ def scene_for_time(creative, t):
 
 
 def compose(creative, t, idx, *, first_scene=False):
+    if creative.get("display_mode") == "full_screen_list":
+        return list_renderer.compose(creative, t, idx)
     duration = float(creative["duration_seconds"])
     scene = creative["timed_scenes"][0] if first_scene else scene_for_time(creative, t)
     kind = scene["kind"]
@@ -181,6 +187,16 @@ def compose(creative, t, idx, *, first_scene=False):
 
 def check_render_prerequisites(creative):
     guard(shutil.which("ffmpeg") and shutil.which("ffprobe"), "ffmpeg and ffprobe required")
+    if creative.get("display_mode") == "full_screen_list":
+        scenes = creative["timed_scenes"]
+        duration = float(creative["duration_seconds"])
+        guard(len(scenes) == 1 and scenes[0].get("kind") == "full_list"
+              and abs(float(scenes[0]["start"])) < .01
+              and abs(float(scenes[0]["end"])-duration) < .01,
+              "list must occupy all frames from time zero")
+        guard(duration*FPS <= 3600, "duration safety cap")
+        list_renderer.layout(creative)  # Strict full-screen font-fit check
+        return
     for s in creative["timed_scenes"]:
         guard(s["kind"] in SCENE_KINDS, "unsupported scene kind")
     timeline = creative["timed_scenes"]
@@ -227,12 +243,13 @@ def render_one(creative, output, palette_index=0):
         for n in range(frames):
             t = n/FPS
             frame = compose(creative, t, palette_index)
-            # Only the final 0.2s reset to the already shown first-frame hook.
-            # Final 0.75+s hold remains fully readable until this seam.
-            seam = 0.2
-            if t >= duration-seam:
-                alpha = (t-(duration-seam))/seam
-                frame = Image.blend(frame, first, max(0, min(1, alpha)))
+            # Lists stay readable from first through final frame.
+            # Legacy illustrated scenes retain their old ending reset.
+            if creative.get("display_mode") != "full_screen_list":
+                seam = 0.2
+                if t >= duration-seam:
+                    alpha = (t-(duration-seam))/seam
+                    frame = Image.blend(frame, first, max(0, min(1, alpha)))
             proc.stdin.write(frame.tobytes())
         proc.stdin.close()
         err = proc.stderr.read()

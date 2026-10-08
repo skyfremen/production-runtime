@@ -119,12 +119,17 @@ def create_artifact(validation, folder):
             md = probe(path, result["duration_seconds"])
             inspect_black_and_decode(path)
             frames = {}
-            scenes = creative["timed_scenes"]
-            for kind in ("hook", "lookup", "payoff", "hold"):
-                scene = next(s for s in scenes if s["kind"] == kind)
-                at = (scene["start"]+scene["end"])/2
-                if kind == "hold":
-                    at = max(scene["start"]+.1, scene["end"]-.32)
+            if creative.get("display_mode") == "full_screen_list":
+                duration = float(creative["duration_seconds"])
+                sample_times = {"first": .03, "middle": duration/2,
+                                "last": max(0., duration-.08)}
+            else:
+                scenes = creative["timed_scenes"]
+                sample_times = {}
+                for kind in ("hook", "lookup", "payoff", "hold"):
+                    scene = next(s for s in scenes if s["kind"] == kind)
+                    sample_times[kind] = (scene["start"]+scene["end"])/2
+            for kind, at in sample_times.items():
                 frames[kind] = capture(path, at, tmp/"previews"/f"{cid}-{kind}.png")
             digest = sha256(path.read_bytes()).hexdigest()
             manifest["videos"].append({"concept_id": cid, "file": f"videos/{cid}.mp4",
@@ -135,7 +140,10 @@ def create_artifact(validation, folder):
                 "text bounds/wrapping mechanically checked; human review still required",
                 "identity_count": len(creative["target_identity_and_coverage"]["identities"]),
                 "first_view_payoff": creative["first_view_payoff"],
-                "loop_review": "0.2s reset crossfade; human visual approval outstanding",
+                "loop_review": ("full list visible at frame zero; subtle cyclic backdrop; "
+                                "human visual approval outstanding"
+                                if creative.get("display_mode") == "full_screen_list"
+                                else "0.2s reset crossfade; human visual approval outstanding"),
             })
         check(len(manifest["videos"]) == len(items), "partial artifact refused")
         report["passed"] = True
