@@ -15,12 +15,16 @@ The bridge revalidates the signed-by-content editorial envelope (a SHA256 digest
 
 ### Media QA caveats
 
-Automated checks verify text bounds, required data presence, timing, video decode, stream dimensions, frame rate, soundtrack absence and extracted-frame contrast. Actual phone viewing, perceived font readability, visual humor and **loop quality** still require human review (Step 10). The last 0.2 seconds visually blend to the opening to avoid a hard black cut. Long mappings that cannot physically fit in the layout **fail closed** instead of being shrunk to unreadable font sizes.
+Automated checks verify text bounds, required data presence, timing, video decode, stream dimensions, frame rate, soundtrack absence and extracted-frame contrast. Actual phone viewing, perceived font readability, visual humor and **loop quality** still require human review (Step 10). The preferred full-screen list keeps its headline and all answers visible from first through final frame, with only a subtle cyclic background shimmer; the legacy illustrated renderer retains its old ending blend. Long mappings that cannot physically fit in the layout **fail closed** instead of being shrunk to unreadable font sizes.
 
 ### Verification and review
 
 The existing public `Verify V2` checks continue to run unchanged. Extra optional Pillow-based Zodiac media tests are run **in the private `zodiac-workflow` CI**, where they exercise a genuine 1080×1920, 30-fps H.264 encode and fail-closed negative cases using fictional input. This avoids producing or uploading private creative assets in the public runtime repository.
 
-For reviewed Zodiac episodes, the private, manual **Zodiac MP4 Preview Artifact (No YouTube)** workflow validates the complete approved draft, pins this runtime at an immutable commit SHA, runs `artifacts.py`, and delivers passing MP4s in a **private 14-day GitHub Actions artifact**. No media is committed to either repository. The private Actions run ID and artifact name provide the download link.
+For reviewed Zodiac episodes, the private, automatically draft-triggered **Zodiac MP4 Preview Artifact (No YouTube)** workflow validates the complete approved draft, pins this runtime at an immutable commit SHA, runs `artifacts.py`, and delivers passing MP4s in a **private 14-day GitHub Actions artifact**. No media is committed to either repository. The private Actions run ID and artifact name provide the download link.
 
 A real synthetic-video artifact was successfully generated and uploaded in the private repo at https://github.com/skyfremen/zodiac-workflow/actions/runs/37721974139; it is a technical demo only. Human quality review and an approved actual episode remain separate steps.
+
+### List-first video presentation
+
+The `list_renderer.py` module supports the primary `display_mode=full_screen_list` layout: a bold headline and complete answer list occupy every frame, with one-scene validation, strict font fit, four template styles, and a dark night-Earth backdrop. The private caller can optionally set `ZODIAC_NIGHT_EARTH_IMAGE` to a local official nighttime Earth photograph after verifying its download; the public runtime itself has no network access. If the environment variable is unset, the background is drawn procedurally. Source credits are included in the private artifact. A real photo-backed synthetic test passed at https://github.com/skyfremen/zodiac-workflow/actions/runs/37727795129.
