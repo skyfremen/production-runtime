@@ -47,18 +47,22 @@ class GitHubState:
             if prior.data!=data: raise RecoveryBlocked(f"Immutable state already exists with different content: {path}")
             return prior
         raw=encoded_json(data); result=None; last=None
-        for attempt in range(4):
+        retry_delays=(0,.5,1,2,4,8)
+        for attempt,delay in enumerate(retry_delays):
+            if delay: time.sleep(delay)
             try:
                 result=self.api(f"contents/{path}",method="PUT",body={"branch":"main","message":f"[runtime] record {Path(path).stem} for {data.get('content_id','state')}",
                     "content":base64.b64encode(raw).decode()}); break
             except HTTPError as e:
                 last=e
-                if e.code not in {409,422}: break
-                prior=self.load(path)
-                if prior:
-                    if prior.data!=data: raise RecoveryBlocked(f"Immutable state already exists with different content: {path}")
-                    return prior
-                if attempt<3: time.sleep(.25*(2**attempt))
+                retry_after=(e.headers or {}).get("Retry-After") if getattr(e,"headers",None) else None
+                transient=e.code in {409,422,429,500,502,503,504} or (e.code==403 and retry_after is not None)
+                if not transient: break
+                if e.code in {409,422}:
+                    prior=self.load(path)
+                    if prior:
+                        if prior.data!=data: raise RecoveryBlocked(f"Immutable state already exists with different content: {path}")
+                        return prior
             except Exception as e: last=e; break
         if result is None: raise RecoveryBlocked(f"Durable write not acknowledged ({type(last).__name__}); retry/recovery only") from None
         if result["content"]["sha"]!=blob_sha(raw): raise RecoveryBlocked("Durable write returned unexpected evidence SHA")
