@@ -45,7 +45,13 @@ def load(path):
 def configuration(root):
     path=Path(root)/'content/config.json'
     cfg=load(path) if path.exists() else deepcopy(DEFAULT_CONFIG)
-    require(type(cfg) is dict and set(cfg)==set(DEFAULT_CONFIG),'CONFIG_SCHEMA')
+    require(type(cfg) is dict and set(cfg) in (set(DEFAULT_CONFIG), {'publication'}),'CONFIG_SCHEMA')
+    slots_path=Path(root)/'data/publish-slots.json'
+    if slots_path.exists():
+        schedule=load(slots_path)
+        require(type(schedule) is dict and set(schedule)=={'timezone','slots'},'CONFIG_SLOTS_SCHEMA')
+        cfg={**cfg,**schedule}
+    require(set(cfg)==set(DEFAULT_CONFIG),'CONFIG_SCHEMA')
     try: ZoneInfo(cfg['timezone'])
     except (KeyError,TypeError): raise FlowRejected('CONFIG_TIMEZONE') from None
     slots=cfg['slots']; pub=cfg['publication']
@@ -152,7 +158,7 @@ def check_draft(root,path):
 def allocate(root,count,cfg,now):
     require(now.tzinfo is not None,'TIMEZONE_REQUIRED')
     used={item['publish_at'] for p in (Path(root)/'content/requests').glob('zq-*.json') for item in load(p)['items']}
-    local=(now+timedelta(minutes=15)).astimezone(ZoneInfo(cfg['timezone'])); choices=[]
+    local=(now+timedelta(minutes=10)).astimezone(ZoneInfo(cfg['timezone'])); choices=[]
     for day in range(366):
         date=local.date()+timedelta(days=day)
         for slot in sorted(cfg['slots']):

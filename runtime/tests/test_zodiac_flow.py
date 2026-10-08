@@ -194,4 +194,71 @@ class FlowTests(unittest.TestCase):
         failure=json.loads((self.root/'content/failures'/self.path.name).read_text())
         self.assertEqual([0,2],[w['winner_index'] for w in failure['affected_winners']])
 
+
+class SlotConfigurationTests(unittest.TestCase):
+    def setUp(self):
+        from zodiac import lifecycle
+        self.flow=lifecycle
+        self.tmp=tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.root=Path(self.tmp.name)
+
+    def write(self,path,data):
+        target=self.root/path; target.parent.mkdir(parents=True,exist_ok=True)
+        target.write_text(json.dumps(data))
+
+    def split_config(self,slots=None):
+        self.write('content/config.json',{'publication':{'enabled':False,'channel_id':None}})
+        self.write('data/publish-slots.json',{'timezone':'Asia/Singapore',
+            'slots':slots or ['00:00','03:00','06:00','09:00','12:00','15:00','18:00','21:00']})
+
+    def test_separate_slots_file_drives_configuration(self):
+        self.split_config()
+        cfg=self.flow.configuration(self.root)
+        self.assertEqual(8,len(cfg['slots']))
+        self.assertFalse(cfg['publication']['enabled'])
+
+    def test_slots_file_overrides_legacy_slots(self):
+        self.write('content/config.json',self.flow.DEFAULT_CONFIG)
+        self.write('data/publish-slots.json',{'timezone':'Asia/Singapore','slots':['09:00','12:00']})
+        self.assertEqual(['09:00','12:00'],self.flow.configuration(self.root)['slots'])
+
+    def test_legacy_pinned_state_remains_readable(self):
+        self.write('content/config.json',self.flow.DEFAULT_CONFIG)
+        self.assertEqual(self.flow.DEFAULT_CONFIG,self.flow.configuration(self.root))
+
+    def test_invalid_new_slots_file_does_not_fall_back(self):
+        self.write('content/config.json',self.flow.DEFAULT_CONFIG)
+        self.write('data/publish-slots.json',{'timezone':'Asia/Singapore','slots':['09:00','09:00']})
+        with self.assertRaisesRegex(self.flow.FlowRejected,'CONFIG_SLOTS'):
+            self.flow.configuration(self.root)
+
+    def test_split_config_requires_slots_file(self):
+        self.write('content/config.json',{'publication':{'enabled':False,'channel_id':None}})
+        with self.assertRaisesRegex(self.flow.FlowRejected,'CONFIG_SCHEMA'):
+            self.flow.configuration(self.root)
+
+    def test_ten_minute_boundary_and_rollover(self):
+        cfg=self.flow.DEFAULT_CONFIG
+        now=datetime(2026,10,8,23,50,tzinfo=__import__('zoneinfo').ZoneInfo('Asia/Singapore'))
+        cfg={**cfg,'slots':['00:00','03:00','06:00','09:00','12:00','15:00','18:00','21:00']}
+        self.assertEqual(['2026-10-08T16:00:00Z'],self.flow.allocate(self.root,1,cfg,now))
+        from datetime import timedelta
+        self.assertEqual(['2026-10-08T19:00:00Z'],self.flow.allocate(self.root,1,cfg,now+timedelta(seconds=1)))
+
+    def test_configuration_change_preserves_existing_request(self):
+        path=save(self.root,'draft-20261008T050000-abc12345.json',fixture(2))
+        first=self.flow.finalize(self.root,path,now=NOW,source_sha=SOURCE,runtime_sha=RUNTIME)
+        original=(self.root/first['request_path']).read_bytes()
+        self.split_config()
+        second=self.flow.finalize(self.root,path,now=NOW,source_sha=SOURCE,runtime_sha='c'*40)
+        self.assertEqual(first,second)
+        self.assertEqual(original,(self.root/first['request_path']).read_bytes())
+
+    def test_new_slots_skip_reservations_and_follow_array_order(self):
+        self.split_config()
+        self.write('content/requests/zq-existing.json',{'items':[{'publish_at':'2026-10-08T07:00:00Z'}]})
+        cfg=self.flow.configuration(self.root)
+        self.assertEqual(['2026-10-08T10:00:00Z','2026-10-08T13:00:00Z'],
+            self.flow.allocate(self.root,2,cfg,NOW))
+
 if __name__=='__main__': unittest.main()

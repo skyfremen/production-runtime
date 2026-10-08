@@ -14,6 +14,9 @@ The existing Wacky Dramas `single.yml`, `runtime/core.py`, transport, contracts,
 
 Dispatch requires `PUBLIC_PRODUCTION_TOKEN` in zodiac-workflow (Actions write on production-runtime). Runtime intake and result writes require `ZODIAC_STATE_TOKEN` in this repository's `exec` environment (Contents read/write on zodiac-workflow). Existing Dramas tokens are not replaced. Passing artifacts request 14-day retention, subject to repository limits; already completed executions skip without creating a new artifact.
 
+## Publication slots
+The private planner's `data/publish-slots.json` owns its timezone and daily times, using the same file shape as Wacky Dramas. `content/config.json` owns publication settings. New winners receive the earliest unused slot at least 10 minutes ahead, in draft array order; reruns preserve their original immutable reservations. Older pinned states with slots in `content/config.json` remain supported. Slot configuration does not create a planning schedule or enable YouTube publication.
+
 ## Publication
 Default: `publication.enabled=false`, `channel_id=null`. The dispatched artifact workflow rejects enabled publication and does not receive OAuth credentials. YouTube uploading will be enabled in a separate future change. The dormant publishing module requires an actual Zodiac channel ID and Zodiac-only OAuth credentials; the Dramas channel ID is explicitly refused.
 
