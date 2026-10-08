@@ -10,12 +10,19 @@ import tempfile
 import unittest
 import os
 from unittest.mock import patch
-from zodiac.artifacts import create_artifact
 from zodiac.entrypoint import validate_envelope, HandoffRejected
-from zodiac.renderer import compose, check_render_prerequisites
 from test_zodiac_lane import envelope
+try:
+    from zodiac.artifacts import create_artifact
+    from zodiac.renderer import compose, check_render_prerequisites
+    MEDIA_DEPS = True
+except ModuleNotFoundError as exc:
+    if exc.name != "PIL":
+        raise
+    MEDIA_DEPS = False
 
 
+@unittest.skipUnless(MEDIA_DEPS, 'Pillow only required in dedicated media CI')
 class RenderTests(unittest.TestCase):
     def test_animated_frame_has_correct_size(self):
         c=envelope(1)["requests"][0]["creative"]
