@@ -5,9 +5,10 @@ copyrighted imagery, YouTube credentials, Wacky code or video uploads.
 """
 from __future__ import annotations
 import math
+import os
 import random
 from functools import lru_cache
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageEnhance
 try:
     from .entrypoint import HandoffRejected
 except ImportError:
@@ -134,7 +135,27 @@ def layout(creative):
 
 @lru_cache(maxsize=1)
 def backdrop():
-    """Build a detailed dark planet once; tiny phase glints supply looped motion."""
+    """Build a dark astronomy background once; no private sources or network access."""
+    nasa_path = os.environ.get("ZODIAC_NIGHT_EARTH_IMAGE", "")
+    if nasa_path:
+        from pathlib import Path
+        require(Path(nasa_path).is_file(), "configured NASA background is missing")
+        with Image.open(nasa_path) as source:
+            require(source.width >= 1000 and source.height >= 500,
+                    "NASA image dimensions too small")
+            source = source.convert("RGB")
+            # Square crop around the photographed Earth, then zoom to fill a
+            # tall phone canvas while the list stays completely stationary.
+            side = min(source.width, source.height)
+            cx,cy=source.width//2, source.height//2
+            source=source.crop((cx-side//2,cy-side//2,
+                                cx+side//2,cy+side//2))
+            earth=source.resize((1860,1860), Image.Resampling.LANCZOS)
+            im=Image.new("RGB",(W,H),(1,4,9))
+            im.paste(earth,(-390,270))
+            im=ImageEnhance.Brightness(im).enhance(.68)
+            night_scrim=Image.new("RGB",(W,H),(1,4,9))
+            return Image.blend(im,night_scrim,.32)
     im=Image.new("RGB",(W,H),(3,7,15))
     d=ImageDraw.Draw(im)
     rng=random.Random(2077)
