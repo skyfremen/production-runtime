@@ -111,14 +111,16 @@ class ChannelIsolationTests(unittest.TestCase):
         if not path.is_file():
             return  # No Zodiac code exists yet. Enforce rules from first introduction.
         source = path.read_text(encoding="utf-8")
-        self.assertIn("environment: zodiac-exec", source)
-        self.assertNotIn("environment: exec\n", source)
+        self.assertIn("environment: exec\n", source)
+        self.assertIn("STATE_TOKEN: ${{ secrets.ZODIAC_STATE_TOKEN }}", source)
         self.assertIn("runtime/zodiac/", source)
         for forbidden in (
             "python runtime/core.py",
             "python runtime/transport.py",
             "skyfremen/youtube-workflow",
             "skyfremen/youtube-analytics-data",
+            "secrets.PRIVATE_STATE_TOKEN",
+            "secrets.RUNTIME_AUTH_",
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, source)
