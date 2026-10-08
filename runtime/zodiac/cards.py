@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Solid black, one-screen, silent Zodiac list renderer.
+"""One-screen Zodiac lists, with optional approved footage and looped music.
 
-No moving background, music, external assets, footage, narration or YouTube.
-Use Python/Pillow to draw text; ffmpeg encodes a still full-screen card as MP4.
+Pillow keeps the existing text layout; ffmpeg encodes the six-second MP4.
+Without private catalogues the legacy silent black preview remains available.
 """
 from __future__ import annotations
 import argparse
@@ -140,13 +140,14 @@ def cmd(args, timeout=120):
     require(p.returncode==0,"COMMAND_FAILED: "+p.stderr[-600:])
     return p.stdout
 
-def qc(mp4, creative, png, layout):
+def qc(mp4, creative, png, layout, *, music=False):
     raw=cmd(["ffprobe","-v","error","-show_entries",
-             "format=duration:stream=codec_type,codec_name,width,height,avg_frame_rate,nb_frames",
+             "format=duration:stream=codec_type,codec_name,width,height,avg_frame_rate,nb_frames,duration,channels,sample_rate",
              "-of","json",str(mp4)])
     doc=json.loads(raw)
     streams=doc.get("streams",[])
-    require(len(streams)==1 and streams[0].get("codec_type")=="video",
+    require(len(streams)==(2 if music else 1) and streams[0].get("codec_type")=="video" and
+            (not music or streams[1].get("codec_name")=="aac"),
             "AUDIO_OR_MULTIPLE_STREAMS")
     stream=streams[0]
     require(stream["width"]==W and stream["height"]==H and
@@ -154,6 +155,9 @@ def qc(mp4, creative, png, layout):
             "WRONG_VIDEO_FORMAT")
     dur=float(doc["format"]["duration"])
     require(abs(dur-float(creative["duration_seconds"]))<.06,"WRONG_VIDEO_DURATION")
+    if music:
+        require(streams[1].get('channels')==2 and streams[1].get('sample_rate')=='48000' and
+                abs(float(streams[1].get('duration',0))-dur)<.06,'INCOMPLETE_AUDIO_STREAM')
     frames=int(stream.get("nb_frames",0))
     require(frames==round(dur*FPS),"FRAME_COUNT_MISMATCH")
     require(mp4.stat().st_size>10000,"EMPTY_MP4")
@@ -169,10 +173,10 @@ def qc(mp4, creative, png, layout):
         require(extrema[1]-extrema[0]>90,"ILLEGIBLE_CONTRAST")
     return {"technical_qc":"pass","human_review":"still_required",
             "width":W,"height":H,"fps":FPS,"codec":"h264",
-            "audio_streams":0,"frames":frames,"duration_seconds":dur,
+            "audio_streams":int(music),"frames":frames,"duration_seconds":dur,
             "size_bytes":mp4.stat().st_size,**layout}
 
-def generate(validated_path, output):
+def generate(validated_path, output, *, catalogue_root=None, media_cache=None):
     doc=json.loads(Path(validated_path).read_text(encoding="utf8"))
     require(doc.get("status")=="approved_for_black_preview" and
             doc.get("lane")=="zodiac" and
@@ -185,6 +189,8 @@ def generate(validated_path, output):
     tmp=Path(tempfile.mkdtemp(prefix="zodiac-black-",dir=str(out.parent)))
     manifest={"lane":"zodiac","background":"solid_black","music":False,
               "youtube_upload_enabled":False,"videos":[]}
+    if catalogue_root is not None:
+        manifest.update(background="approved_catalogue",music=True)
     report={"passed":False,"concepts":[]}
     try:
         for item in doc["winners"]:
@@ -193,21 +199,29 @@ def generate(validated_path, output):
             mp4=tmp/"videos"/(cid+".mp4")
             layout=render_card(item,png)
             mp4.parent.mkdir(parents=True,exist_ok=True)
-            cmd(["ffmpeg","-hide_banner","-loglevel","error","-y",
+            provenance={}
+            if catalogue_root is not None:
+                from .media import prepare, encode
+                bg,music,provenance=prepare(catalogue_root,cid,tmp/'media'/cid,cache=media_cache)
+                encode(png,bg,music,mp4)
+                layout['background']='approved_catalogue'
+            else:
+                cmd(["ffmpeg","-hide_banner","-loglevel","error","-y",
                  "-loop","1","-framerate",str(FPS),"-i",str(png),
                  "-t",str(item["duration_seconds"]),"-an",
                  "-c:v","libx264","-preset","veryfast","-crf","21",
                  "-pix_fmt","yuv420p","-movflags","+faststart",str(mp4)],timeout=180)
-            result=qc(mp4,item,png,layout)
+            result=qc(mp4,item,png,layout,music=catalogue_root is not None)
             checksum=sha256(mp4.read_bytes()).hexdigest()
             manifest["videos"].append({"id":cid,"title":item["title"],
                                         "file":f"videos/{cid}.mp4",
-                                        "sha256":checksum,**result})
+                                        "sha256":checksum,**result,**provenance})
             report["concepts"].append({"id":cid,"qc":"pass",
                                        "title":item["title"],
                                        "layout":layout})
         require(len(manifest["videos"])==doc["winner_count"],"INCOMPLETE_BATCH")
         report["passed"]=True
+        shutil.rmtree(tmp/'media',ignore_errors=True)
         (tmp/"manifest.json").write_text(json.dumps(manifest,indent=2)+"\n")
         (tmp/"qc.json").write_text(json.dumps(report,indent=2)+"\n")
         tmp.rename(out)

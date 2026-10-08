@@ -3,7 +3,8 @@
 The current list flow uses a single implementation in this repository:
 - `content.py`: the existing normal JSON draft contract, sign coverage, score bounds, readable lengths and duplicate checks.
 - `lifecycle.py`: compact repairs (maximum five), immutable requests and execution records, independent publication slots, result provenance and derived context.
-- `cards.py`: the migrated silent full-screen card renderer; actual H.264 encoding, font fit, ffprobe and complete decode/QC.
+- `cards.py`: full-screen list text; H.264/AAC encoding, font fit, ffprobe and complete decode/QC.
+- `media.py`: deterministic selection from the private `data/background.json` and `data/audio.json`, native vertical 1080p Pexels footage, and six-second cosine loops. Music gain is the approved audition gain. Both catalogues are required together; missing or invalid assets reject production. Older states without either catalogue keep the silent black preview.
 - `production.py`: exact request/execution intake and one-video production.
 - `publish.py`: future opt-in publishing with Zodiac-only credentials, pinned channel identity and a durable upload reservation.
 
