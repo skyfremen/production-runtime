@@ -1,0 +1,118 @@
+name: Zodiac — shared production
+on:
+  workflow_call:
+    inputs:
+      execution_id: {required: true, type: string}
+      source_sha: {required: true, type: string}
+      runtime_sha: {required: true, type: string}
+permissions:
+  contents: write
+jobs:
+  produce:
+    if: github.repository == 'skyfremen/zodiac-workflow'
+    runs-on: ubuntu-latest
+    environment: zodiac-exec
+    timeout-minutes: 30
+    concurrency:
+      group: zodiac-execution-${{ inputs.execution_id }}
+      cancel-in-progress: false
+    defaults:
+      run:
+        shell: bash
+    env:
+      EXECUTION_ID: ${{ inputs.execution_id }}
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      RUNTIME_SHA: ${{ inputs.runtime_sha }}
+      PYTHONPATH: .runtime/runtime
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      ZODIAC_CLIENT_ID: ${{ secrets.ZODIAC_CLIENT_ID }}
+      ZODIAC_CLIENT_SECRET: ${{ secrets.ZODIAC_CLIENT_SECRET }}
+      ZODIAC_REFRESH_TOKEN: ${{ secrets.ZODIAC_REFRESH_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+          path: .state
+      - uses: actions/checkout@v4
+        with:
+          repository: skyfremen/production-runtime
+          ref: ${{ inputs.runtime_sha }}
+          path: .runtime
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Check exact revisions and prior completion
+        id: prior
+        run: |
+          set -euo pipefail
+          [[ "$(git -C .state rev-parse HEAD)" == "$SOURCE_SHA" ]]
+          [[ "$(git -C .runtime rev-parse HEAD)" == "$RUNTIME_SHA" ]]
+          test -f .runtime/runtime/zodiac/production.py
+          python - <<'PY'
+          import os, re
+          assert re.fullmatch(r'ze-[0-9a-f]{24}', os.environ['EXECUTION_ID'])
+          assert all(re.fullmatch(r'[0-9a-f]{40}',os.environ[k]) for k in ('SOURCE_SHA','RUNTIME_SHA'))
+          PY
+          git -C .state fetch origin main
+          git -C .state merge-base --is-ancestor "$SOURCE_SHA" origin/main
+          if git -C .state cat-file -e "origin/main:content/results/$EXECUTION_ID.json" 2>/dev/null; then
+            git -C .state show "origin/main:content/results/$EXECUTION_ID.json" > "$RUNNER_TEMP/prior-result.json"
+            python -m zodiac.lifecycle ingest-result --root .state --result "$RUNNER_TEMP/prior-result.json"
+            echo "complete=true" >> "$GITHUB_OUTPUT"
+            echo "Execution already has an immutable verified result; skipping production."
+          else
+            echo "complete=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Install existing list-render prerequisites
+        if: steps.prior.outputs.complete != 'true'
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg fonts-dejavu-core
+          python -m pip install --disable-pip-version-check 'Pillow>=10.4,<13'
+          python - <<'PY'
+          import os, subprocess, sys
+          from pathlib import Path
+          from zodiac.production import load_execution
+          request,_,_=load_execution('.state',os.environ['EXECUTION_ID'],source_sha=os.environ['SOURCE_SHA'],
+              runtime_sha=os.environ['RUNTIME_SHA'],repository=os.environ['GITHUB_REPOSITORY'])
+          if request['publication']['enabled']:
+              existing=Path('.runtime/runtime/requirements.txt').read_text().splitlines()
+              api_deps=[line for line in existing if line.startswith(('google-api-python-client','google-auth=='))]
+              subprocess.run([sys.executable,'-m','pip','install','--disable-pip-version-check',*api_deps],check=True)
+          PY
+      - name: Produce and verify exact Zodiac execution
+        if: steps.prior.outputs.complete != 'true'
+        run: |
+          python -m zodiac.production --root .state --execution-id "$EXECUTION_ID" \
+            --source-sha "$SOURCE_SHA" --runtime-sha "$RUNTIME_SHA" \
+            --repository "$GITHUB_REPOSITORY" --output "$RUNNER_TEMP/zodiac-artifact"
+      - name: Save passing MP4s in the PRIVATE caller's Actions run
+        if: steps.prior.outputs.complete != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.execution_id }}
+          path: ${{ runner.temp }}/zodiac-artifact/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+          overwrite: true
+      - name: Record result and rebuild context on current main
+        if: steps.prior.outputs.complete != 'true'
+        run: |
+          set -euo pipefail
+          git -C .state config user.name 'github-actions[bot]'
+          git -C .state config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          for attempt in 1 2 3; do
+            git -C .state fetch origin main
+            git -C .state reset --hard origin/main
+            python -m zodiac.lifecycle ingest-result --root .state --result "$RUNNER_TEMP/zodiac-artifact/result.json"
+            git -C .state add content/results content/context.json
+            if git -C .state diff --cached --quiet; then exit 0; fi
+            git -C .state commit -m '[zodiac result] record verified execution and refresh context'
+            if git -C .state push origin HEAD:main; then exit 0; fi
+          done
+          echo '::error::ZODIAC_RESULT_PUSH_RETRIES_EXHAUSTED'
+          exit 1
