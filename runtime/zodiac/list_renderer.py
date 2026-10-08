@@ -148,18 +148,40 @@ def backdrop():
         d.ellipse((px-pr-width,py-pr-width,px+pr+width,py+pr+width),
                   outline=(4,18+width,32+2*width),width=2)
     d.ellipse((px-pr,py-pr,px+pr,py+pr),fill=(5,24,36),outline=(26,123,156),width=7)
-    d.ellipse((px-pr+135,py-pr+55,px+pr+370,py+pr+110),
-              fill=(1,8,19))
-    for _ in range(1100):
-        x=rng.randrange(0,W);y=rng.randrange(490,1810)
+    # Faint approximate continent shapes. This is a PROCEDURAL illustration,
+    # not a geographically precise NASA photograph or licensed footage.
+    mask=Image.new("L",(W,H),0)
+    md=ImageDraw.Draw(mask)
+    continents=[
+        [(160,640),(275,590),(395,690),(423,805),(365,873),(291,1001),
+         (182,919),(111,778)],
+        [(415,783),(552,758),(634,876),(588,994),(627,1163),
+         (550,1361),(468,1250),(449,1100),(402,955)],
+        [(565,602),(778,560),(941,650),(1022,775),(961,934),
+         (850,962),(775,877),(655,840),(602,730)],
+        [(726,1224),(817,1148),(928,1267),(950,1442),
+         (833,1508),(749,1402)],
+    ]
+    for shape in continents:
+        md.polygon(shape,fill=255)
+        d.polygon(shape,fill=(11,51,54),outline=(15,63,66),width=3)
+    # Blue cloud and limb details behind the text.
+    for i in range(9):
+        cx=460+(i%3)*195
+        cy=620+(i//3)*340
+        d.arc((cx-160,cy-65,cx+290,cy+100),195,330,
+              fill=(14,47,63),width=2)
+    # Night city lights concentrated on illustrated land, not random space.
+    for _ in range(2300):
+        x=rng.randrange(0,W);y=rng.randrange(500,1750)
         nx,ny=(x-px)/pr,(y-py)/pr
-        if nx*nx+ny*ny>0.94 or x>930: continue
-        if math.sin(x/85)+math.cos(y/64)+math.sin((x+y)/46)<0.50: continue
-        g=rng.choice((19,27,42,53))
-        d.ellipse((x,y,x+2,y+2),fill=(g,g+8,g//3))
-    # Dark scrim creates strong contrast behind every line of text.
+        if nx*nx+ny*ny>0.94 or x>930 or not mask.getpixel((x,y)):
+            continue
+        strength=rng.choice((49,70,90,115))
+        d.ellipse((x,y,x+2,y+2),fill=(strength,min(255,strength+20),strength//3))
+    # Global dark scrim: sky remains legible under every static answer.
     overlay=Image.new("RGB",(W,H),(2,5,11))
-    return Image.blend(im,overlay,0.24)
+    return Image.blend(im,overlay,0.20)
 
 
 def compose(creative, t, index=0):
