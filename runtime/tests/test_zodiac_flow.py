@@ -64,6 +64,20 @@ class FlowTests(unittest.TestCase):
         self.assertEqual([1],[x['winner_index'] for x in failure['affected_winners']])
         self.assertFalse(list((self.root/'content/requests').glob('*.json')))
 
+    def test_new_submission_rejects_eighteen_seconds_with_targeted_repair(self):
+        data=fixture(2); data['winners'][0]['duration_seconds']=18
+        self.path.write_text(json.dumps(data))
+        with self.assertRaisesRegex(self.flow.FlowRejected,'DURATION_MUST_BE_6'):
+            self.finalize()
+        failure=json.loads((self.root/'content/failures'/self.path.name).read_text())
+        self.assertEqual([0],[w['winner_index'] for w in failure['affected_winners']])
+        self.assertTrue(failure['repairable'])
+
+    def test_older_longer_draft_remains_originality_history(self):
+        old=fixture(); old['winners'][0]['duration_seconds']=18
+        path=save(self.root,'draft-20261008T040000-12345678.json',old)
+        self.assertEqual(old['winners'],self.flow.previous(self.root,{self.path.stem}))
+
     def test_compact_repair_preserves_unaffected_winner(self):
         original=fixture(2); bad=deepcopy(original); bad['winners'][1]['rows'].pop()
         self.path.write_text(json.dumps(bad))

@@ -6,7 +6,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import sys
-from .content import validate, Rejected
+from .content import validate_submission as validate, Rejected
 from .lifecycle import REPOSITORY, SHA, EXECUTION, DRAFT, load, blob, digest, encoded, reconstruct, FlowRejected
 
 class ProductionRejected(ValueError): pass

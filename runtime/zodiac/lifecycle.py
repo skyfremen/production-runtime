@@ -10,7 +10,7 @@ import re
 import subprocess
 import sys
 from zoneinfo import ZoneInfo
-from .content import Rejected, read_json, validate
+from .content import Rejected, read_json, validate, validate_submission
 
 REPOSITORY='skyfremen/zodiac-workflow'
 SHA=re.compile(r'^[0-9a-f]{40}$')
@@ -121,13 +121,13 @@ def check_draft(root,path):
     old=previous(root,ancestry)
     affected=[]
     try:
-        validate(data,old)
+        validate_submission(data,old)
         return data
     except (Rejected,KeyError,TypeError) as exc:
         code=str(exc); winners=data.get('winners',[]); n=data.get('winner_count')
         if type(winners) is list and type(n) is int and 1<=n<=10 and len(winners)==n:
             for i,w in enumerate(winners):
-                try: validate({'winner_count':1,'winners':[w]},old)
+                try: validate_submission({'winner_count':1,'winners':[w]},old)
                 except (Rejected,KeyError,TypeError) as err:
                     affected.append({'winner_index':i,'winner':w,'violations':[str(err)]})
             # Reuse the validator on clean pairs to isolate actual conflicts,

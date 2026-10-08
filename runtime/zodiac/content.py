@@ -143,6 +143,12 @@ def validate(draft, previous=()):
             "lane": "zodiac", "youtube_upload_enabled": False,
             "winners": winners}
 
+def validate_submission(draft, previous=()):
+    result = validate(draft, previous)
+    for index, winner in enumerate(draft['winners']):
+        require(winner['duration_seconds'] == 6, f'WINNER_{index+1}_DURATION_MUST_BE_6')
+    return result
+
 def main(argv=None):
     p=argparse.ArgumentParser(description="Offline Zodiac draft validation")
     p.add_argument("--draft", required=True)
@@ -152,7 +158,7 @@ def main(argv=None):
     try:
         data=read_json(args.draft)
         history=previous_items(args.draft, args.history_root)
-        result=validate(data, history)
+        result=validate_submission(data, history)
         output=Path(args.output)
         require(output.resolve() != Path(args.draft).resolve(), "OUTPUT_OVERWRITE")
         output.parent.mkdir(parents=True, exist_ok=True)
