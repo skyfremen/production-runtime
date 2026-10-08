@@ -68,6 +68,36 @@ class ListMediaTests(unittest.TestCase):
         self.assertNotEqual(compose(c,0,0).tobytes(), compose(c,3,0).tobytes())
         check_render_prerequisites(c)
 
+    def test_ranked_template_has_all_twelve_numbered_entries(self):
+        c=list_envelope()["requests"][0]["creative"]
+        c["list_style"]="ranking"
+        result=list_renderer.layout(c)
+        self.assertEqual(len(result["entries"]),12)
+        self.assertEqual(result["entries"][0][1],"1. ARIES")
+        self.assertEqual(result["entries"][-1][1],"12. PISCES")
+
+    def test_four_elements_have_four_group_headers(self):
+        c=list_envelope()["requests"][0]["creative"]
+        c["list_style"]="grouped_elements"
+        result=list_renderer.layout(c)
+        self.assertEqual(len(result["entries"]),16)
+        groups=[x[1] for x in result["entries"] if x[0]=="group"]
+        self.assertEqual(groups,["FIRE","EARTH","AIR","WATER"])
+
+    def test_trait_to_sign_list_template(self):
+        c=list_envelope()["requests"][0]["creative"]
+        c["list_style"]="trait_matches"
+        c["target_identity_and_coverage"]={
+            "kind":"subset","universal":False,"subset_label":"Zodiac traits",
+            "identities":["most observant","best under pressure","biggest dreamer"],
+            "results":{"most observant":"Scorpio, Virgo",
+                       "best under pressure":"Capricorn, Aries",
+                       "biggest dreamer":"Pisces, Aquarius"}}
+        c["task_prompt"]="Zodiac traits to compare"
+        info=list_renderer.layout(c)
+        self.assertEqual(info["identity_count"],3)
+        self.assertEqual(len(info["entries"]),3)
+
     def test_reject_unreadable_very_long_result(self):
         c=list_envelope()["requests"][0]["creative"]
         c["target_identity_and_coverage"]["results"]["aries"]="X"*250
