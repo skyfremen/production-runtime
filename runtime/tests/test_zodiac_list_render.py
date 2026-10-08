@@ -71,7 +71,7 @@ class ListMediaTests(unittest.TestCase):
     def test_reject_unreadable_very_long_result(self):
         c=list_envelope()["requests"][0]["creative"]
         c["target_identity_and_coverage"]["results"]["aries"]="X"*250
-        with self.assertRaisesRegex(HandoffRejected,"outside phone-safe width"):
+        with self.assertRaisesRegex(HandoffRejected,"answer does not fit|outside phone-safe width"):
             check_render_prerequisites(c)
 
     def test_reject_more_than_18_rows(self):
