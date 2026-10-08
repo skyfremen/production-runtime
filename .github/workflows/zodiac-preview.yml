@@ -1,0 +1,71 @@
+name: Zodiac — catalogue preview
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/zodiac-preview.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  preview:
+    if: github.repository == 'skyfremen/production-runtime' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: zodiac-exec
+    timeout-minutes: 15
+    env:
+      SOURCE_SHA: 1320af185f38f4d1d110e031b97fa76b044685e2
+      PYTHONPATH: .runtime/runtime
+    steps:
+      - name: Fetch pinned planner and current runtime
+        env:
+          STATE_TOKEN: ${{ secrets.ZODIAC_STATE_TOKEN }}
+        run: |
+          python - <<'PY'
+          import base64, os, subprocess
+          from pathlib import Path
+          token=os.environ.get('STATE_TOKEN','')
+          if not token: raise SystemExit('::error::ZODIAC_STATE_TOKEN_REQUIRED')
+          for path,repo,sha in (
+              ('.state','skyfremen/zodiac-workflow',os.environ['SOURCE_SHA']),
+              ('.runtime','skyfremen/production-runtime',os.environ['GITHUB_SHA'])):
+              def git(*args): subprocess.run(['git','-C',path,*args],check=True)
+              subprocess.run(['git','init','--quiet',path],check=True)
+              git('remote','add','origin','https://github.com/'+repo+'.git')
+              if path=='.state':
+                  auth=base64.b64encode(('x-access-token:'+token).encode()).decode()
+                  with Path(path,'.git/config').open('a') as f:
+                      f.write('\n[http "https://github.com/"]\n\textraheader = AUTHORIZATION: basic '+auth+'\n')
+              git('fetch','--quiet','origin','main')
+              git('checkout','--quiet','--detach',sha)
+          PY
+      - name: Install media prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg fonts-dejavu-core
+          python -m pip install --disable-pip-version-check 'Pillow>=10.4,<13'
+      - name: Render one approved catalogue preview
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          from zodiac.content import validate
+          from zodiac.cards import generate
+          source=Path('.state/content/drafts/draft-20261008T145559-a8f3c271.json')
+          doc=json.loads(source.read_text())
+          validated=validate({'winner_count':1,'winners':doc['winners'][:1]})
+          temp=Path(os.environ['RUNNER_TEMP'])
+          inp=temp/'validated.json';inp.write_text(json.dumps(validated))
+          result=generate(inp,temp/'zodiac-preview',catalogue_root=Path('.state'))
+          assert result['videos']==1 and result['qc_passed'] and not result['youtube_upload_enabled']
+          with Path(os.environ['GITHUB_STEP_SUMMARY']).open('a') as f:
+              f.write('### Zodiac catalogue preview\n\nOne 1080 × 1920, six-second video with approved background and music. '
+                      'Download **zodiac-catalogue-preview** below. No upload, publishing slot or production state changes.\n')
+          PY
+      - name: Upload video and QC artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: zodiac-catalogue-preview
+          path: ${{ runner.temp }}/zodiac-preview/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
