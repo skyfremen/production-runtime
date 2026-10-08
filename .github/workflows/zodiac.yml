@@ -59,7 +59,7 @@ jobs:
           git -C .state merge-base --is-ancestor "$SOURCE_SHA" origin/main
           if git -C .state cat-file -e "origin/main:content/results/$EXECUTION_ID.json" 2>/dev/null; then
             git -C .state show "origin/main:content/results/$EXECUTION_ID.json" > "$RUNNER_TEMP/prior-result.json"
-            python -m zodiac.lifecycle ingest-result --root .state --result "$RUNNER_TEMP/prior-result.json"
+            python -m zodiac.lifecycle ingest-result --root "$GITHUB_WORKSPACE/.state" --result "$RUNNER_TEMP/prior-result.json"
             echo "complete=true" >> "$GITHUB_OUTPUT"
             echo "Execution already has an immutable verified result; skipping production."
           else
@@ -76,7 +76,7 @@ jobs:
           import os, subprocess, sys
           from pathlib import Path
           from zodiac.production import load_execution
-          request,_,_=load_execution('.state',os.environ['EXECUTION_ID'],source_sha=os.environ['SOURCE_SHA'],
+          request,_,_=load_execution(Path('.state').resolve(),os.environ['EXECUTION_ID'],source_sha=os.environ['SOURCE_SHA'],
               runtime_sha=os.environ['RUNTIME_SHA'],repository=os.environ['GITHUB_REPOSITORY'])
           if request['publication']['enabled']:
               existing=Path('.runtime/runtime/requirements.txt').read_text().splitlines()
@@ -86,7 +86,7 @@ jobs:
       - name: Produce and verify exact Zodiac execution
         if: steps.prior.outputs.complete != 'true'
         run: |
-          python -m zodiac.production --root .state --execution-id "$EXECUTION_ID" \
+          python -m zodiac.production --root "$GITHUB_WORKSPACE/.state" --execution-id "$EXECUTION_ID" \
             --source-sha "$SOURCE_SHA" --runtime-sha "$RUNTIME_SHA" \
             --repository "$GITHUB_REPOSITORY" --output "$RUNNER_TEMP/zodiac-artifact"
       - name: Save passing MP4s in the PRIVATE caller's Actions run
@@ -108,7 +108,7 @@ jobs:
           for attempt in 1 2 3; do
             git -C .state fetch origin main
             git -C .state reset --hard origin/main
-            python -m zodiac.lifecycle ingest-result --root .state --result "$RUNNER_TEMP/zodiac-artifact/result.json"
+            python -m zodiac.lifecycle ingest-result --root "$GITHUB_WORKSPACE/.state" --result "$RUNNER_TEMP/zodiac-artifact/result.json"
             git -C .state add content/results content/context.json
             if git -C .state diff --cached --quiet; then exit 0; fi
             git -C .state commit -m '[zodiac result] record verified execution and refresh context'

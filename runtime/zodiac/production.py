@@ -15,7 +15,7 @@ def require(ok,reason):
     if not ok: raise ProductionRejected(reason)
 
 def load_execution(root,execution_id,*,source_sha,runtime_sha,repository):
-    root=Path(root)
+    root=Path(root).resolve()
     require(repository==REPOSITORY,'ZODIAC_REPOSITORY_REQUIRED')
     require(isinstance(execution_id,str) and EXECUTION.fullmatch(execution_id),'EXECUTION_ID')
     require(isinstance(source_sha,str) and SHA.fullmatch(source_sha),'SOURCE_SHA')

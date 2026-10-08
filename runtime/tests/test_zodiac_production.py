@@ -32,6 +32,21 @@ class ProductionTests(unittest.TestCase):
         self.assertEqual(execution['content_id'],item['winner']['id'])
         self.assertEqual(execution['request_id'],request['request_id'])
 
+    def test_relative_checkout_root_matches_actions_layout(self):
+        import os
+        original=Path.cwd()
+        try:
+            os.chdir(self.root.parent)
+            request,item,execution=self.prod.load_execution(self.root.name,self.eid,source_sha=SOURCE,
+                runtime_sha=RUNTIME,repository='skyfremen/zodiac-workflow')
+        finally: os.chdir(original)
+        self.assertEqual(self.eid,execution['execution_id'])
+
+    def test_workflow_passes_absolute_private_checkout_to_pinned_code(self):
+        source=(Path(__file__).resolve().parents[2]/'.github/workflows/zodiac.yml').read_text()
+        self.assertNotIn('--root .state',source)
+        self.assertIn("load_execution(Path('.state').resolve()",source)
+
     def test_tampered_request_rejected(self):
         path=self.root/self.batch['request_path']; request=load(path)
         request['items'][0]['winner']['title']='ANOTHER TITLE WITH DIFFERENT ANSWERS'; path.write_text(json.dumps(request))
