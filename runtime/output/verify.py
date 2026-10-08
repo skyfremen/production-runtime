@@ -1,6 +1,6 @@
 """Exact remote verification for V2 scheduled-private uploads."""
 import argparse, time
-from datetime import datetime
+from datetime import datetime, timezone
 from base.contract import OUTPUT_DIR, atomic_write_json, load_json, marker_tag
 from output.state import GitHubState, RecoveryBlocked, check_identity, evidence_path, identity_for, now
 from output.transfer import authenticated_channel, make_client
@@ -50,11 +50,18 @@ def verify_video(youtube,request,identity,evidence,sleep=time.sleep):
             if snippet.get(field)!=expected.get(field): raise RecoveryBlocked(f"Remote {field} differs from durable upload intent")
         if status.get("uploadStatus")!="processed": observations.append({"attempt":attempt,"state":"processing","upload_status":status.get("uploadStatus")}); continue
         if marker not in (snippet.get("tags") or []): observations.append({"attempt":attempt,"state":"marker_pending"}); continue
-        if status.get("privacyStatus")!="private": raise RecoveryBlocked("Scheduled video is not PRIVATE before publication")
+        privacy=status.get("privacyStatus")
         observed_publish=_instant(status.get("publishAt"))
-        if observed_publish is None or observed_publish!=expected_publish: raise RecoveryBlocked("Remote publishAt differs from durable scheduled intent")
         publish_at=expected_publish.isoformat().replace("+00:00","Z")
-        return {"passed":True,"state":"verified_scheduled","verified_at":now(),**identity,"youtube_video_id":video_id,"channel_id":channel["id"],"privacy_status":"private","publish_at":publish_at,"upload_status":"processed","association_method":"immutable_upload_record+remote_marker","observed_marker_tags":[marker],"attempts":attempt,"prior_observations":observations}
+        if privacy=="private":
+            if observed_publish is None or observed_publish!=expected_publish: raise RecoveryBlocked("Remote publishAt differs from durable scheduled intent")
+            state_name="verified_scheduled"
+        elif privacy=="public" and datetime.now(timezone.utc)>=expected_publish.astimezone(timezone.utc):
+            if observed_publish is not None and observed_publish!=expected_publish: raise RecoveryBlocked("Remote publishAt differs from durable scheduled intent")
+            state_name="verified_published"
+        else:
+            raise RecoveryBlocked("Scheduled video has unexpected privacy state for its immutable publish time")
+        return {"passed":True,"state":state_name,"verified_at":now(),**identity,"youtube_video_id":video_id,"channel_id":channel["id"],"privacy_status":privacy,"publish_at":publish_at,"upload_status":"processed","association_method":"immutable_upload_record+remote_marker","observed_marker_tags":[marker],"attempts":attempt,"prior_observations":observations}
     last=observations[-1] if observations else {"state":"unknown"}
     raise VerificationPending(f"Remote verification is still pending after one bounded window; last_observation={last}")
 
