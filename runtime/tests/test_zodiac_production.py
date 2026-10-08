@@ -16,13 +16,21 @@ class ProductionTests(unittest.TestCase):
         self.assertNotIn('workflow_call:',source)
         self.assertIn("github.repository == 'skyfremen/production-runtime'",source)
         self.assertIn('SOURCE_REPOSITORY: skyfremen/zodiac-workflow',source)
-        self.assertIn('repository: skyfremen/zodiac-workflow',source)
-        self.assertIn('token: ${{ secrets.ZODIAC_STATE_TOKEN }}',source)
+        self.assertIn('STATE_TOKEN: ${{ secrets.ZODIAC_STATE_TOKEN }}',source)
         self.assertIn('--repository "$SOURCE_REPOSITORY"',source)
-        self.assertIn('uses: actions/upload-artifact@v4',source)
+        self.assertIn('uses: actions/upload-artifact@',source)
         self.assertNotIn('--repository "$GITHUB_REPOSITORY"',source)
         self.assertNotIn('secrets.RUNTIME_AUTH_',source)
         self.assertNotIn('secrets.PRIVATE_STATE_TOKEN',source)
+
+    def test_workflow_respects_runtime_action_policy(self):
+        import re
+        source=(Path(__file__).resolve().parents[2]/'.github/workflows/zodiac.yml').read_text()
+        actions=re.findall(r'uses:\s*(\S+)',source)
+        self.assertEqual(1,len(actions),'runtime permits only its pinned artifact upload action')
+        self.assertRegex(actions[0],r'^actions/upload-artifact@[0-9a-f]{40}$')
+        self.assertNotIn('actions/checkout@',source)
+        self.assertNotIn('actions/setup-python@',source)
 
     def test_artifact_can_be_replaced_on_result_write_retry(self):
         source=(Path(__file__).resolve().parents[2]/'.github/workflows/zodiac.yml').read_text()

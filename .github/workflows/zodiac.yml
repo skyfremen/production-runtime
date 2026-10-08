@@ -38,23 +38,27 @@ jobs:
           assert re.fullmatch(r'ze-[0-9a-f]{24}',os.environ['EXECUTION_ID'])
           assert all(re.fullmatch(r'[0-9a-f]{40}',os.environ[k]) for k in ('SOURCE_SHA','RUNTIME_SHA'))
           PY
-      - uses: actions/checkout@v4
-        with:
-          repository: skyfremen/zodiac-workflow
-          token: ${{ secrets.ZODIAC_STATE_TOKEN }}
-          ref: ${{ inputs.source_sha }}
-          fetch-depth: 0
-          path: .state
-      - uses: actions/checkout@v4
-        with:
-          repository: skyfremen/production-runtime
-          ref: ${{ inputs.runtime_sha }}
-          path: .runtime
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+      - name: Fetch exact source without disallowed setup actions
+        env:
+          STATE_TOKEN: ${{ secrets.ZODIAC_STATE_TOKEN }}
+        run: |
+          python - <<'PY'
+          import base64, os, subprocess
+          from pathlib import Path
+          def git(*args):
+              subprocess.run(['git',*args],check=True)
+          for path,repo,sha in (
+              ('.state',os.environ['SOURCE_REPOSITORY'],os.environ['SOURCE_SHA']),
+              ('.runtime','skyfremen/production-runtime',os.environ['RUNTIME_SHA'])):
+              git('init','--quiet',path)
+              git('-C',path,'remote','add','origin','https://github.com/'+repo+'.git')
+              if path=='.state':
+                  auth=base64.b64encode(('x-access-token:'+os.environ['STATE_TOKEN']).encode()).decode()
+                  with Path(path,'.git/config').open('a') as config:
+                      config.write('\n[http "https://github.com/"]\n\textraheader = AUTHORIZATION: basic '+auth+'\n')
+              git('-C',path,'fetch','--quiet','origin','main')
+              git('-C',path,'checkout','--quiet','--detach',sha)
+          PY
       - name: Check exact revisions and prior completion
         id: prior
         run: |
@@ -103,7 +107,7 @@ jobs:
             --repository "$SOURCE_REPOSITORY" --output "$RUNNER_TEMP/zodiac-artifact"
       - name: Save passing MP4s in production-runtime's Actions run
         if: steps.prior.outputs.complete != 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ${{ inputs.execution_id }}
           path: ${{ runner.temp }}/zodiac-artifact/
