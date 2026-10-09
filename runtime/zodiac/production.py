@@ -14,7 +14,7 @@ class ProductionRejected(ValueError): pass
 def require(ok,reason):
     if not ok: raise ProductionRejected(reason)
 
-def load_execution(root,execution_id,*,source_sha,runtime_sha,repository):
+def load_legacy_execution(root,execution_id,*,source_sha,runtime_sha,repository):
     root=Path(root).resolve()
     require(repository==REPOSITORY,'ZODIAC_REPOSITORY_REQUIRED')
     require(isinstance(execution_id,str) and EXECUTION.fullmatch(execution_id),'EXECUTION_ID')
@@ -52,6 +52,18 @@ def load_execution(root,execution_id,*,source_sha,runtime_sha,repository):
         require(valid_channel_id(pub['channel_id']),'ZODIAC_CHANNEL_REQUIRED')
     return request,item,execution
 
+def load_execution(root,execution_id,*,source_sha,runtime_sha,repository):
+    require(repository==REPOSITORY,'ZODIAC_REPOSITORY_REQUIRED')
+    require(isinstance(execution_id,str) and __import__('re').fullmatch(r'(?:ex|ze)-[0-9a-f]{24}',execution_id),'EXECUTION_ID')
+    require(isinstance(source_sha,str) and SHA.fullmatch(source_sha),'SOURCE_SHA')
+    require(isinstance(runtime_sha,str) and SHA.fullmatch(runtime_sha),'RUNTIME_SHA')
+    root=Path(root).resolve()
+    if execution_id.startswith('ze-'):
+        return load_legacy_execution(root,execution_id,source_sha=source_sha,runtime_sha=runtime_sha,repository=repository)
+    from .contract import intake, ContractRejected
+    try: return intake(root,execution_id,source_sha=source_sha,runtime_sha=runtime_sha)
+    except ContractRejected as exc: raise ProductionRejected(str(exc)) from None
+
 def produce(root,execution_id,*,source_sha,runtime_sha,repository,output):
     request,item,execution=load_execution(root,execution_id,source_sha=source_sha,runtime_sha=runtime_sha,repository=repository)
     from .cards import generate
@@ -59,12 +71,17 @@ def produce(root,execution_id,*,source_sha,runtime_sha,repository,output):
     with tempfile.TemporaryDirectory(prefix='zodiac-intake-') as folder:
         path=Path(folder)/'validated.json'; path.write_bytes(encoded(validated))
         catalogues=Path(root)/'data'
-        configured=any((catalogues/name).exists() for name in ('background.json','audio.json'))
+        configured=any((catalogues/name).exists() for name in ('backgrounds.json','background.json','audio.json'))
         generate(path,output,catalogue_root=root if configured else None)
     manifest=load(Path(output)/'manifest.json'); video=manifest['videos'][0]
-    result={k:execution[k] for k in ('execution_id','content_id','request_id','request_blob_sha','runtime_sha','publish_at')}
-    result.update(source_sha=source_sha,state='rendered',qc_passed=True,artifact_name=execution_id,
-                  video_sha256=video['sha256'],video_id=None)
+    if execution.get('execution_version')==2:
+        result={**{k:execution[k] for k in ('execution_id','content_id','request_id','request_blob_sha','item_blob_sha','runtime_sha')},
+            'result_version':2,'status':'rendered','visibility':'private','verified':True,'youtube_video_id':None,
+            'source_sha':source_sha,'qc_passed':True,'artifact_name':execution_id,'video_sha256':video['sha256'],'publish_at':item['publish_at']}
+    else:
+        result={k:execution[k] for k in ('execution_id','content_id','request_id','request_blob_sha','runtime_sha','publish_at')}
+        result.update(source_sha=source_sha,state='rendered',qc_passed=True,artifact_name=execution_id,
+                      video_sha256=video['sha256'],video_id=None)
     if request['publication']['enabled']:
         from .publish import publish
         result['video_id']=publish(request,item,Path(output)/video['file'],execution,source_sha)
@@ -82,7 +99,7 @@ def main(argv=None):
         head=subprocess.check_output(['git','-C',a.root,'rev-parse','HEAD'],text=True).strip()
         require(head==a.source_sha,'PRIVATE_CHECKOUT_REVISION_MISMATCH')
         result=produce(a.root,a.execution_id,source_sha=a.source_sha,runtime_sha=a.runtime_sha,repository=a.repository,output=a.output)
-        print(json.dumps({'execution_id':result['execution_id'],'state':result['state'],'qc_passed':True})); return 0
+        print(json.dumps({'execution_id':result['execution_id'],'state':result.get('status',result.get('state')),'qc_passed':True})); return 0
     except (ProductionRejected,FlowRejected,Rejected,ValueError,OSError,KeyError,TypeError,subprocess.CalledProcessError) as exc:
         print('ZODIAC_PRODUCTION_REJECTED: '+str(exc),file=sys.stderr); return 2
 

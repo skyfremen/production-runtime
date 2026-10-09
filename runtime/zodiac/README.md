@@ -1,14 +1,16 @@
 # Zodiac list production on shared main
 
 The current list flow uses a single implementation in this repository:
-- `content.py`: the existing normal JSON draft contract, sign coverage, score bounds, readable lengths and duplicate checks.
-- `lifecycle.py`: compact repairs (maximum five), immutable requests and execution records, independent publication slots, result provenance and derived context.
+- `content.py`: render-time content validation and legacy contract compatibility. Private `zodiac-workflow/pipeline.py` owns planner validation.
+- `contract.py`: strict version 2 runtime intake and source/request/item identity checks.
+- `transport.py` and `core.py`: exact intake manifest, production, verified result-only writeback.
+- `lifecycle.py`: frozen compatibility helpers for existing version 1 requests/results; new planning state is owned by private `zodiac-workflow/lifecycle.py`.
 - `cards.py`: full-screen list text; H.264/AAC encoding, font fit, ffprobe and complete decode/QC.
-- `media.py`: deterministic selection from the private `data/background.json` and `data/audio.json`, native vertical 1080p Pexels footage, and six-second cosine loops. Music gain is the approved audition gain. Both catalogues are required together; missing or invalid assets reject production. Older states without either catalogue keep the silent black preview.
+- `media.py`: deterministic selection from the private `data/backgrounds.json` (old pinned states may use `background.json`) and `data/audio.json`, native vertical 1080p Pexels footage, and six-second cosine loops. Music gain is the approved audition gain. Both catalogues are required together; missing or invalid assets reject production. Older states without either catalogue keep the silent black preview.
 - `production.py`: exact request/execution intake and one-video production.
 - `publish.py`: future opt-in publishing with Zodiac-only credentials, pinned channel identity and a durable upload reservation.
 
-The private `skyfremen/zodiac-workflow` dispatches `.github/workflows/zodiac.yml` on `main`. The planner succeeds once GitHub accepts the handoff. The independent production job and MP4/QC artifact belong to **production-runtime**. Inputs are fetched from the exact private source revision using `ZODIAC_STATE_TOKEN`; verified results and derived context are written back to zodiac-workflow. Both repositories maintain only `main`; each request records the exact shared code revision used for reproducibility.
+The private `skyfremen/zodiac-workflow` dispatches `.github/workflows/zodiac.yml` on `main`. The planner succeeds once GitHub accepts the handoff. The independent production job and MP4/QC artifact belong to **production-runtime**. Inputs are fetched from the exact private source revision using `ZODIAC_STATE_TOKEN`; only verified results are written back to zodiac-workflow; private result/context workflows own history and derived context. Both repositories maintain only `main`; each request records the exact shared code revision used for reproducibility.
 
 The existing Wacky Dramas `single.yml`, `runtime/core.py`, transport, contracts, credentials, state and upload route are unchanged. The Zodiac workflow uses the `exec` environment with its Zodiac-specific `ZODIAC_STATE_TOKEN`, runs only here on main, and fixes its private source to skyfremen/zodiac-workflow. Never route Zodiac requests through Dramas entrypoints.
 
@@ -25,4 +27,6 @@ Before any future video insertion, publishing must commit an execution reservati
 The older illustrated/list-envelope modules (`entrypoint.py`, `renderer.py`, `list_renderer.py`, `artifacts.py`) retain their existing backward-compatible offline behavior; they are not used by the current planner contract.
 
 ## Verification
+Zodiac uses the same digest-pinned base container as Drama; the production workflow installs no dependencies during each run. New rq/ex requests/executions have version 2 common envelopes with Zodiac content fields. Existing zq/ze records and their exact runtime revisions remain supported.
+
 Run `PYTHONPATH=runtime python -m unittest discover -s runtime/tests` and the existing three runtime contract/self-test commands. Optional media tests require the already-declared Pillow, ffmpeg/ffprobe and DejaVu fonts. New synthetic flow tests exercise finalization, repair, exact identities, real MP4/QC, result ingestion and context without contacting YouTube.

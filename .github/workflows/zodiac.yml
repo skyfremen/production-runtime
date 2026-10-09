@@ -8,11 +8,17 @@ on:
       runtime_sha: {required: true, type: string}
 permissions:
   contents: read
+  packages: read
 jobs:
   produce:
     if: github.repository == 'skyfremen/production-runtime' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: exec
+    container:
+      image: ghcr.io/skyfremen/runtime-base@sha256:c44ac7ba2457e0757954252ae24e266dd62e57a63f172d0d3520348ae1f9bd12
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     timeout-minutes: 30
     concurrency:
       group: zodiac-execution-${{ inputs.execution_id }}
@@ -35,7 +41,7 @@ jobs:
           import os, re
           if not os.environ.get('STATE_TOKEN'):
               raise SystemExit('::error::ZODIAC_STATE_TOKEN_REQUIRED')
-          assert re.fullmatch(r'ze-[0-9a-f]{24}',os.environ['EXECUTION_ID'])
+          assert re.fullmatch(r'(?:ex|ze)-[0-9a-f]{24}',os.environ['EXECUTION_ID'])
           assert all(re.fullmatch(r'[0-9a-f]{40}',os.environ[k]) for k in ('SOURCE_SHA','RUNTIME_SHA'))
           PY
       - name: Fetch exact source without disallowed setup actions
@@ -58,6 +64,8 @@ jobs:
                       config.write('\n[http "https://github.com/"]\n\textraheader = AUTHORIZATION: basic '+auth+'\n')
               git('-C',path,'fetch','--quiet','origin','main')
               git('-C',path,'checkout','--quiet','--detach',sha)
+          # Result validation follows the workflow revision; rendering keeps the recorded revision.
+          git('-C','.runtime','worktree','add','--quiet','--detach',str(Path('.support').resolve()),os.environ['GITHUB_SHA'])
           PY
       - name: Check exact revisions and prior completion
         id: prior
@@ -68,28 +76,44 @@ jobs:
           test -f .runtime/runtime/zodiac/production.py
           python - <<'PY'
           import os, re
-          assert re.fullmatch(r'ze-[0-9a-f]{24}', os.environ['EXECUTION_ID'])
+          assert re.fullmatch(r'(?:ex|ze)-[0-9a-f]{24}', os.environ['EXECUTION_ID'])
           assert all(re.fullmatch(r'[0-9a-f]{40}',os.environ[k]) for k in ('SOURCE_SHA','RUNTIME_SHA'))
           PY
           git -C .state fetch origin main
           git -C .state merge-base --is-ancestor "$SOURCE_SHA" origin/main
           git -C .runtime fetch origin main
           git -C .runtime merge-base --is-ancestor "$RUNTIME_SHA" origin/main
-          if git -C .state cat-file -e "origin/main:content/results/$EXECUTION_ID.json" 2>/dev/null; then
-            git -C .state show "origin/main:content/results/$EXECUTION_ID.json" > "$RUNNER_TEMP/prior-result.json"
-            python -m zodiac.lifecycle ingest-result --root "$GITHUB_WORKSPACE/.state" --result "$RUNNER_TEMP/prior-result.json"
+          result_path="$(python - <<'PYCODE'
+          import json, os
+          from pathlib import Path
+          execution=json.load(open(Path('.state/content/executions')/(os.environ['EXECUTION_ID']+'.json')))
+          name=execution['content_id'] if execution['execution_version']==2 else execution['execution_id']
+          print('content/results/'+name+'.json')
+          PYCODE
+          )"
+          content_id="$(python -c 'import json,os; print(json.load(open(".state/content/executions/"+os.environ["EXECUTION_ID"]+".json"))["content_id"])')"
+          for folder in abandonments slot-cancellations; do
+            if git -C .state cat-file -e "origin/main:content/$folder/$content_id.json" 2>/dev/null; then
+              echo '::error::ZODIAC_EXECUTION_RELEASED'; exit 1;
+            fi
+          done
+          if git -C .state cat-file -e "origin/main:$result_path" 2>/dev/null; then
+            git -C .state show "origin/main:$result_path" > "$RUNNER_TEMP/prior-result.json"
+            if [[ -f .support/runtime/zodiac/transport.py ]]; then
+              PYTHONPATH="$GITHUB_WORKSPACE/.support/runtime" python -m zodiac.transport result --root "$GITHUB_WORKSPACE/.state" --result "$RUNNER_TEMP/prior-result.json"
+            elif [[ -f .runtime/runtime/zodiac/transport.py ]]; then
+              python -m zodiac.transport result --root "$GITHUB_WORKSPACE/.state" --result "$RUNNER_TEMP/prior-result.json"
+            else
+              python -m zodiac.lifecycle ingest-result --root "$GITHUB_WORKSPACE/.state" --result "$RUNNER_TEMP/prior-result.json"
+            fi
             echo "complete=true" >> "$GITHUB_OUTPUT"
-            echo "Execution already has an immutable verified result; skipping production."
           else
             echo "complete=false" >> "$GITHUB_OUTPUT"
           fi
-      - name: Install existing list-render prerequisites
+      - name: Validate intake using shared container prerequisites
         if: steps.prior.outputs.complete != 'true'
         run: |
           set -euo pipefail
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg fonts-dejavu-core
-          python -m pip install --disable-pip-version-check 'Pillow>=10.4,<13'
           python - <<'PY'
           import os
           from pathlib import Path
@@ -102,9 +126,17 @@ jobs:
       - name: Produce and verify exact Zodiac execution
         if: steps.prior.outputs.complete != 'true'
         run: |
-          python -m zodiac.production --root "$GITHUB_WORKSPACE/.state" --execution-id "$EXECUTION_ID" \
-            --source-sha "$SOURCE_SHA" --runtime-sha "$RUNTIME_SHA" \
-            --repository "$SOURCE_REPOSITORY" --output "$RUNNER_TEMP/zodiac-artifact"
+          if [[ -f .runtime/runtime/zodiac/transport.py ]]; then
+            python -m zodiac.transport fetch --root "$GITHUB_WORKSPACE/.state" --execution-id "$EXECUTION_ID" \
+              --source-sha "$SOURCE_SHA" --runtime-sha "$RUNTIME_SHA" --repository "$SOURCE_REPOSITORY" \
+              --output "$RUNNER_TEMP/zodiac-execution.json"
+            python -m zodiac.core --manifest "$RUNNER_TEMP/zodiac-execution.json" --output "$RUNNER_TEMP/zodiac-artifact"
+          else
+            # Already committed V1 executions keep their exact old runtime.
+            python -m zodiac.production --root "$GITHUB_WORKSPACE/.state" --execution-id "$EXECUTION_ID" \
+              --source-sha "$SOURCE_SHA" --runtime-sha "$RUNTIME_SHA" \
+              --repository "$SOURCE_REPOSITORY" --output "$RUNNER_TEMP/zodiac-artifact"
+          fi
       - name: Save passing MP4s in production-runtime's Actions run
         if: steps.prior.outputs.complete != 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -124,10 +156,14 @@ jobs:
           for attempt in 1 2 3; do
             git -C .state fetch origin main
             git -C .state reset --hard origin/main
-            python -m zodiac.lifecycle ingest-result --root "$GITHUB_WORKSPACE/.state" --result "$RUNNER_TEMP/zodiac-artifact/result.json"
-            # Reuse pinned provenance validation, but leave durable context to
-            # the private result workflow. This also supports older requests.
-            git -C .state restore content/context.json
+            if [[ -f .support/runtime/zodiac/transport.py ]]; then
+              PYTHONPATH="$GITHUB_WORKSPACE/.support/runtime" python -m zodiac.transport result --root "$GITHUB_WORKSPACE/.state" --result "$RUNNER_TEMP/zodiac-artifact/result.json"
+            elif [[ -f .runtime/runtime/zodiac/transport.py ]]; then
+              python -m zodiac.transport result --root "$GITHUB_WORKSPACE/.state" --result "$RUNNER_TEMP/zodiac-artifact/result.json"
+            else
+              python -m zodiac.lifecycle ingest-result --root "$GITHUB_WORKSPACE/.state" --result "$RUNNER_TEMP/zodiac-artifact/result.json"
+              git -C .state restore content/context.json
+            fi
             git -C .state add content/results
             if git -C .state diff --cached --quiet; then exit 0; fi
             git -C .state commit -m '[zodiac result] record verified execution'

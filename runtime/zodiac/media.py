@@ -48,10 +48,17 @@ def source(asset, cache, kind):
             partial.unlink(missing_ok=True)
     return target
 
+def catalogue_paths(root):
+    data=Path(root)/'data'
+    background=data/'backgrounds.json'
+    if not background.exists(): background=data/'background.json'
+    return background,data/'audio.json'
+
 def prepare(root, content_id, work, cache=None):
     root=Path(root);work=Path(work);work.mkdir(parents=True,exist_ok=True)
     cache=Path(cache) if cache else work/'sources';cache.mkdir(parents=True,exist_ok=True)
-    docs=[json.loads((root/'data'/name).read_text()) for name in ('background.json','audio.json')]
+    paths=catalogue_paths(root)
+    docs=[json.loads(path.read_text()) for path in paths]
     if any(d.get('version')!=1 or d['output']['duration_seconds']!=6 for d in docs):
         raise ValueError('UNSUPPORTED_MEDIA_CATALOGUE')
     background,audio=select_assets(*docs,content_id)
@@ -96,7 +103,7 @@ def prepare(root, content_id, work, cache=None):
     provenance={'background_id':background['id'],'audio_id':audio['id'],
                 'background_source_sha256':sha256(raw_video.read_bytes()).hexdigest(),
                 'audio_source_sha256':sha256(raw_audio.read_bytes()).hexdigest(),
-                'catalogue_sha256':{name:sha256((root/'data'/name).read_bytes()).hexdigest() for name in ('background.json','audio.json')}}
+                'catalogue_sha256':{path.name:sha256(path.read_bytes()).hexdigest() for path in paths}}
     return video,music,provenance
 
 def encode(card, background, music, mp4):
