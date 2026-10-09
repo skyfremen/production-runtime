@@ -141,9 +141,10 @@ def verify(youtube,request,item,identity,evidence,result,*,sleep=time.sleep):
     require(evidence.get('upload_body')==expected and evidence.get('render_result')==result,'evidence differs from the verified request/video')
     video_id=evidence['youtube_video_id']; require(bool(VIDEO_ID.fullmatch(str(video_id))),'invalid video identity')
     at=datetime.fromisoformat(item['publication']['publish_at'].replace('Z','+00:00'))
-    for delay in RETRY_DELAYS:
+    last_observation='video not visible'
+    for attempt,delay in enumerate(RETRY_DELAYS,1):
         if delay: sleep(delay)
-        items=youtube.videos().list(part='snippet,status',id=video_id).execute().get('items',[])
+        items=youtube.videos().list(part='snippet,status,processingDetails',id=video_id).execute().get('items',[])
         if not items: continue
         require(len(items)==1 and items[0].get('id')==video_id,'remote video identity mismatch')
         snippet=items[0].get('snippet') or {}; status=items[0].get('status') or {}
@@ -151,7 +152,15 @@ def verify(youtube,request,item,identity,evidence,result,*,sleep=time.sleep):
         require(status.get('uploadStatus') not in ('failed','rejected','deleted') and
             not status.get('failureReason') and not status.get('rejectionReason'),'YouTube rejected the upload')
         require(all(snippet.get(k)==expected['snippet'][k] for k in ('title','description','categoryId')),'remote metadata mismatch')
-        if status.get('uploadStatus')!='processed' or marker(identity['content_id']) not in (snippet.get('tags') or []): continue
+        marker_present=marker(identity['content_id']) in (snippet.get('tags') or [])
+        if status.get('uploadStatus')!='processed' or not marker_present:
+            upload_status=status.get('uploadStatus')
+            processing_status=(items[0].get('processingDetails') or {}).get('processingStatus')
+            if upload_status not in ('deleted','failed','processed','rejected','uploaded'): upload_status='unknown'
+            if processing_status not in ('processing','succeeded','failed','terminated'): processing_status='unknown'
+            last_observation=f'upload_status={upload_status}; processing_status={processing_status}; marker_present={marker_present}'
+            print(f'Zodiac verification {attempt}: video={video_id}; {last_observation}',flush=True)
+            continue
         privacy=status.get('privacyStatus'); observed=status.get('publishAt')
         if privacy=='private':
             require(observed is not None and datetime.fromisoformat(observed.replace('Z','+00:00'))==at,'remote schedule mismatch')
@@ -161,7 +170,7 @@ def verify(youtube,request,item,identity,evidence,result,*,sleep=time.sleep):
             outcome='published'
         else: raise RecoveryBlocked('Zodiac publishing: unexpected visibility for the reserved slot')
         return {**result,'status':outcome,'visibility':privacy,'youtube_video_id':video_id,'verified':True}
-    raise RecoveryBlocked('Zodiac publishing: remote verification pending; rerun to verify the same upload')
+    raise RecoveryBlocked('Zodiac publishing: remote verification pending; '+last_observation+'; rerun to verify the same upload')
 
 def validate_recorded_result(root,request,item,execution,result):
     identity=identity_for(execution); records={}

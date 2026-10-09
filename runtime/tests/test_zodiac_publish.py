@@ -1,5 +1,7 @@
 """Upload boundaries use synthetic local state and a fake YouTube client."""
 from copy import deepcopy
+from contextlib import redirect_stdout
+from io import StringIO
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from pathlib import Path
@@ -121,6 +123,20 @@ class PublishingTests(unittest.TestCase):
         evidence=self.upload(); self.youtube.remote[0]['status']['uploadStatus']='uploaded'
         with self.assertRaisesRegex(self.publisher.RecoveryBlocked,'pending'):
             self.publisher.verify(self.youtube,self.request,self.item,self.identity,evidence,self.result,sleep=lambda _:None)
+        self.assertEqual(1,self.youtube.inserts)
+
+    def test_pending_verification_reports_safe_existing_video_state(self):
+        evidence=self.upload()
+        self.youtube.remote[0]['status']['uploadStatus']='uploaded'
+        self.youtube.remote[0]['processingDetails']={'processingStatus':'processing','private_detail':'do-not-log-this'}
+        output=StringIO()
+        with redirect_stdout(output), self.assertRaises(self.publisher.RecoveryBlocked) as error:
+            self.publisher.verify(self.youtube,self.request,self.item,self.identity,evidence,self.result,sleep=lambda _:None)
+        self.assertIn('upload_status=uploaded',str(error.exception))
+        self.assertIn('processing_status=processing',str(error.exception))
+        self.assertIn(VIDEO,output.getvalue())
+        self.assertNotIn('do-not-log-this',output.getvalue())
+        self.assertNotIn(self.youtube.body['snippet']['description'],output.getvalue())
         self.assertEqual(1,self.youtube.inserts)
 
     def test_wrong_channel_blocked_before_insert(self):
