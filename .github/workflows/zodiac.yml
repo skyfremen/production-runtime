@@ -141,16 +141,6 @@ jobs:
             --source-sha "$SOURCE_SHA" --runtime-sha "$RUNTIME_SHA" --repository "$SOURCE_REPOSITORY" \
             --output "$RUNNER_TEMP/zodiac-execution.json"
           python -m zodiac.core --manifest "$RUNNER_TEMP/zodiac-execution.json" --output "$RUNNER_TEMP/zodiac-artifact"
-      - name: Save passing MP4s in production-runtime's Actions run
-        if: steps.prior.outputs.complete != 'true' && steps.publish.outputs.recovered != 'true'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: ${{ inputs.execution_id }}
-          path: ${{ runner.temp }}/zodiac-artifact/
-          if-no-files-found: error
-          retention-days: 14
-          compression-level: 0
-          overwrite: true
       - name: Upload verified Zodiac video and verify its schedule
         if: steps.prior.outputs.complete != 'true' && steps.publish.outputs.recovered != 'true'
         env:
@@ -183,7 +173,7 @@ jobs:
           if [[ '${{ job.status }}' != 'success' ]]; then
             echo "Execution $EXECUTION_ID failed. Check the failed step; an existing upload intent forbids a duplicate upload." >> "$GITHUB_STEP_SUMMARY"
           elif [[ '${{ steps.prior.outputs.complete }}' == 'true' ]]; then
-            echo "Execution $EXECUTION_ID already has a verified result; no new artifact was produced." >> "$GITHUB_STEP_SUMMARY"
+            echo "Execution $EXECUTION_ID already has a verified result; no new rendering or upload was performed." >> "$GITHUB_STEP_SUMMARY"
           else
           python - <<'PY'
           import json, os

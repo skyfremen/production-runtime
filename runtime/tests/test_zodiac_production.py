@@ -10,14 +10,14 @@ from test_zodiac_flow import fixture, prepare_execution, SOURCE, RUNTIME
 from zodiac.contract import load
 
 class ProductionTests(unittest.TestCase):
-    def test_artifact_upload_and_remote_verification_precede_final_writeback(self):
+    def test_render_upload_and_remote_verification_precede_final_writeback(self):
         source=(Path(__file__).resolve().parents[2]/'.github/workflows/zodiac.yml').read_text()
         names=('Check Zodiac channel and recover an existing upload','Produce and verify exact Zodiac execution',
-            "Save passing MP4s in production-runtime's Actions run",'Upload verified Zodiac video and verify its schedule',
+            'Upload verified Zodiac video and verify its schedule',
             'Record verified result on current main')
         positions=[source.index('- name: '+name) for name in names]
         self.assertEqual(sorted(positions),positions)
-        for start,end in ((positions[0],positions[1]),(positions[3],positions[4])):
+        for start,end in ((positions[0],positions[1]),(positions[2],positions[3])):
             step=source[start:end]
             for secret in ('ZODIAC_STATE_TOKEN','ZODIAC_CLIENT_ID','ZODIAC_CLIENT_SECRET','ZODIAC_REFRESH_TOKEN'):
                 self.assertIn(secret+': ${{ secrets.'+secret+' }}',step)
@@ -30,7 +30,7 @@ class ProductionTests(unittest.TestCase):
         self.assertIn('SOURCE_REPOSITORY: skyfremen/zodiac-workflow',source)
         self.assertIn('STATE_TOKEN: ${{ secrets.ZODIAC_STATE_TOKEN }}',source)
         self.assertIn('--repository "$SOURCE_REPOSITORY"',source)
-        self.assertIn('uses: actions/upload-artifact@',source)
+        self.assertNotIn('uses: actions/upload-artifact@',source)
         self.assertNotIn('--repository "$GITHUB_REPOSITORY"',source)
         self.assertNotIn('secrets.RUNTIME_AUTH_',source)
         self.assertNotIn('secrets.PRIVATE_STATE_TOKEN',source)
@@ -39,14 +39,14 @@ class ProductionTests(unittest.TestCase):
         import re
         source=(Path(__file__).resolve().parents[2]/'.github/workflows/zodiac.yml').read_text()
         actions=re.findall(r'uses:\s*(\S+)',source)
-        self.assertEqual(1,len(actions),'runtime permits only its pinned artifact upload action')
-        self.assertRegex(actions[0],r'^actions/upload-artifact@[0-9a-f]{40}$')
+        self.assertEqual([],actions,'production uses the pinned container without Actions artifacts')
         self.assertNotIn('actions/checkout@',source)
         self.assertNotIn('actions/setup-python@',source)
 
-    def test_artifact_can_be_replaced_on_result_write_retry(self):
+    def test_mp4_is_not_uploaded_as_an_actions_artifact(self):
         source=(Path(__file__).resolve().parents[2]/'.github/workflows/zodiac.yml').read_text()
-        self.assertIn('overwrite: true',source)
+        self.assertNotIn('actions/upload-artifact@',source)
+        self.assertNotIn('retention-days:',source)
 
     def setUp(self):
         self.assertIsNotNone(importlib.util.find_spec('zodiac.production'),'shared production entrypoint missing')

@@ -93,7 +93,7 @@ def intake(root,eid,*,source_sha,runtime_sha):
     draft=root/f'content/drafts/{did}.json'
     require(blob(draft.read_bytes())==request['draft_blob_sha'],'DRAFT_BLOB_MISMATCH')
     reconstructed,_=reconstruct(root,draft)
-    items=request['items']; require(type(items) is list and 1<=len(items)<=10,'REQUEST_ITEMS')
+    items=request['items']; require(type(items) is list and len(items)>0,'REQUEST_ITEMS')
     winners=[]; slots=set()
     for item in items:
         require(type(item) is dict and set(item)=={'request_version','content_id','source_draft_id','channel','zodiac','publication','render','youtube','visibility'},'REQUEST_ITEM_SCHEMA')

@@ -5,7 +5,6 @@ No network, model, secrets, music, YouTube, analytics or background downloads.
 """
 from __future__ import annotations
 import argparse
-from difflib import SequenceMatcher
 import json
 from pathlib import Path
 import re
@@ -65,10 +64,10 @@ def previous_items(draft_path, root):
 def validate(draft, previous=()):
     require(type(draft) is dict and set(draft) == DRAFT_FIELDS, "DRAFT_SCHEMA")
     n = draft["winner_count"]
-    require(type(n) is int and 1 <= n <= 10, "WINNER_COUNT")
+    require(type(n) is int and n > 0, "WINNER_COUNT")
     winners = draft["winners"]
     require(type(winners) is list and len(winners) == n, "WINNER_COUNT_MISMATCH")
-    ids, titles, signatures = set(), [], []
+    ids = set()
     for index, w in enumerate(winners):
         tag = f"WINNER_{index+1}"
         require(type(w) is dict and set(w) == WINNER_FIELDS, tag + "_SCHEMA")
@@ -114,31 +113,12 @@ def validate(draft, previous=()):
         # Prefer short readable lines rather than attempting to shrink to tiny fonts.
         require(all(len(row["label"] + ": " + row["answer"]) <= 78 for row in rows),
                 tag + "_MOBILE_LINE_TOO_LONG")
-        title_sig = norm(title)
-        content_sig = "|".join(labels) + "||" + "|".join(answers)
-        for old in titles:
-            require(SequenceMatcher(None, title_sig, old).ratio() < .82,
-                    tag + "_SIMILAR_TITLES")
-        for old in signatures:
-            require(content_sig != old, tag + "_REPEATED_LIST")
-        titles.append(title_sig)
-        signatures.append(content_sig)
     for old in previous:
         if not isinstance(old, dict):
             continue
-        other_title = old.get("title")
         other_id = old.get("id")
         if other_id in ids:
             raise Rejected("HISTORY_REUSED_ID")
-        if isinstance(other_title, str):
-            for title in titles:
-                require(SequenceMatcher(None, title, norm(other_title)).ratio() < .86,
-                        "HISTORY_SIMILAR_TOPIC")
-        previous_rows = old.get("rows")
-        if isinstance(previous_rows, list):
-            old_sig = "|".join(norm(r.get("label", "")) for r in previous_rows if isinstance(r, dict))
-            old_sig += "||" + "|".join(norm(r.get("answer", "")) for r in previous_rows if isinstance(r, dict))
-            require(old_sig not in signatures, "HISTORY_REPEATED_LIST")
     return {"status": "approved_for_black_preview", "winner_count": n,
             "lane": "zodiac", "youtube_upload_enabled": False,
             "winners": winners}
