@@ -16,8 +16,6 @@ Zodiac uses its own entry point and `ZODIAC_STATE_TOKEN`, `ZODIAC_CLIENT_ID`, `Z
 
 Before upload, `intent.json` is acknowledged in `content/executions/evidence/<content_id>/`. After YouTube returns a video ID, `upload.json` records that ID and the exact request/video. Recovery uses the stored ID or scans for the unique content marker. An unresolved intent blocks any second upload. Processing still pending is a failed verification window, not a completed result; rerunning verifies the same video without rendering again. Expired slots are not silently moved. Abandonment is blocked once any intent exists.
 
-`.github/workflows/zodiac-preview.yml` remains an explicit development catalogue preview using current planner main and the run's runtime revision. It does not reserve slots, write production records or upload to YouTube.
-
 Dramas' workflow, shared core, credentials, contracts and state are unchanged. Zodiac uses the same pinned base container without dependency installs during production. The removed illustrated renderers, runtime planner, old uploader and compatibility tests are not supported paths.
 
 Verification: run the private tests with `ZODIAC_RUNTIME_PATH` set to this repository's `runtime` directory, and `PYTHONPATH=runtime python -m unittest discover -s runtime/tests`. Media tests need Pillow, ffmpeg/ffprobe and DejaVu fonts; offline contract tests do not contact YouTube.
