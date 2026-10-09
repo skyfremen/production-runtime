@@ -10,7 +10,7 @@ The current list flow uses a single implementation in this repository:
 - `production.py`: exact request/execution intake and one-video production.
 - `publish.py`: future opt-in publishing with Zodiac-only credentials, pinned channel identity and a durable upload reservation.
 
-The private `skyfremen/zodiac-workflow` dispatches `.github/workflows/zodiac.yml` on `main`. The planner succeeds once GitHub accepts the handoff. The independent production job and MP4/QC artifact belong to **production-runtime**. Inputs are fetched from the exact private source revision using `ZODIAC_STATE_TOKEN`; only verified results are written back to zodiac-workflow; private result/context workflows own history and derived context. Both repositories maintain only `main`; each request records the exact shared code revision used for reproducibility.
+The private `skyfremen/zodiac-workflow` dispatches `.github/workflows/zodiac.yml` on `main`. The planner succeeds once GitHub accepts the handoff. The independent production job and MP4/QC artifact belong to **production-runtime**. Inputs are fetched from the exact private source revision using `ZODIAC_STATE_TOKEN`; only verified results are written back to zodiac-workflow; private result/context workflows own history and derived context. Both repositories maintain only `main`; new executions use the main revision selected for each production run, like Dramas. Results record the exact shared code revision actually used. Retries of unfinished new executions can pick up runtime fixes; existing pinned executions retain their original revision.
 
 The existing Wacky Dramas `single.yml`, `runtime/core.py`, transport, contracts, credentials, state and upload route are unchanged. The Zodiac workflow uses the `exec` environment with its Zodiac-specific `ZODIAC_STATE_TOKEN`, runs only here on main, and fixes its private source to skyfremen/zodiac-workflow. Never route Zodiac requests through Dramas entrypoints.
 
@@ -30,3 +30,4 @@ The older illustrated/list-envelope modules (`entrypoint.py`, `renderer.py`, `li
 Zodiac uses the same digest-pinned base container as Drama; the production workflow installs no dependencies during each run. New rq/ex requests/executions have version 2 common envelopes with Zodiac content fields. Existing zq/ze records and their exact runtime revisions remain supported.
 
 Run `PYTHONPATH=runtime python -m unittest discover -s runtime/tests` and the existing three runtime contract/self-test commands. Optional media tests require the already-declared Pillow, ffmpeg/ffprobe and DejaVu fonts. New synthetic flow tests exercise finalization, repair, exact identities, real MP4/QC, result ingestion and context without contacting YouTube.
+

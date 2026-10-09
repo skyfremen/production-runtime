@@ -75,7 +75,7 @@ def produce(root,execution_id,*,source_sha,runtime_sha,repository,output):
         generate(path,output,catalogue_root=root if configured else None)
     manifest=load(Path(output)/'manifest.json'); video=manifest['videos'][0]
     if execution.get('execution_version')==2:
-        result={**{k:execution[k] for k in ('execution_id','content_id','request_id','request_blob_sha','item_blob_sha','runtime_sha')},
+        result={**{k:execution[k] for k in ('execution_id','content_id','request_id','request_blob_sha','item_blob_sha')},'runtime_sha':runtime_sha,
             'result_version':2,'status':'rendered','visibility':'private','verified':True,'youtube_video_id':None,
             'source_sha':source_sha,'qc_passed':True,'artifact_name':execution_id,'video_sha256':video['sha256'],'publish_at':item['publish_at']}
     else:
@@ -104,3 +104,4 @@ def main(argv=None):
         print('ZODIAC_PRODUCTION_REJECTED: '+str(exc),file=sys.stderr); return 2
 
 if __name__=='__main__': raise SystemExit(main())
+

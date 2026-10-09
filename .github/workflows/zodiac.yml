@@ -5,7 +5,7 @@ on:
     inputs:
       execution_id: {required: true, type: string}
       source_sha: {required: true, type: string}
-      runtime_sha: {required: true, type: string}
+      runtime_sha: {description: Optional pin for existing executions, required: false, default: "", type: string}
 permissions:
   contents: read
   packages: read
@@ -42,20 +42,34 @@ jobs:
           if not os.environ.get('STATE_TOKEN'):
               raise SystemExit('::error::ZODIAC_STATE_TOKEN_REQUIRED')
           assert re.fullmatch(r'(?:ex|ze)-[0-9a-f]{24}',os.environ['EXECUTION_ID'])
-          assert all(re.fullmatch(r'[0-9a-f]{40}',os.environ[k]) for k in ('SOURCE_SHA','RUNTIME_SHA'))
+          assert re.fullmatch(r'[0-9a-f]{40}',os.environ['SOURCE_SHA'])
+          assert not os.environ['RUNTIME_SHA'] or re.fullmatch(r'[0-9a-f]{40}',os.environ['RUNTIME_SHA'])
           PY
       - name: Fetch exact source without disallowed setup actions
         env:
           STATE_TOKEN: ${{ secrets.ZODIAC_STATE_TOKEN }}
         run: |
           python - <<'PY'
-          import base64, os, subprocess
+          import base64, json, os, re, subprocess
           from pathlib import Path
           def git(*args):
               subprocess.run(['git',*args],check=True)
           for path,repo,sha in (
               ('.state',os.environ['SOURCE_REPOSITORY'],os.environ['SOURCE_SHA']),
               ('.runtime','skyfremen/production-runtime',os.environ['RUNTIME_SHA'])):
+              if path=='.runtime':
+                  execution=json.loads(Path('.state/content/executions',os.environ['EXECUTION_ID']+'.json').read_text())
+                  if 'runtime_sha' in execution:
+                      sha=execution['runtime_sha']
+                      assert re.fullmatch(r'[0-9a-f]{40}',str(sha)), 'INVALID_RECORDED_RUNTIME'
+                      assert not os.environ['RUNTIME_SHA'] or os.environ['RUNTIME_SHA']==sha, 'RUNTIME_REVISION_MISMATCH'
+                  else:
+                      assert execution['execution_version']==2, 'LEGACY_RUNTIME_PIN_REQUIRED'
+                      assert not os.environ['RUNTIME_SHA'], 'UNPINNED_EXECUTION_USES_RUN_REVISION'
+                      sha=os.environ['GITHUB_SHA']
+                  assert re.fullmatch(r'[0-9a-f]{40}',sha), 'INVALID_RUN_RUNTIME'
+                  with Path(os.environ['GITHUB_ENV']).open('a') as environment:
+                      environment.write('RUNTIME_SHA='+sha+'\n')
               git('init','--quiet',path)
               git('-C',path,'remote','add','origin','https://github.com/'+repo+'.git')
               if path=='.state':
@@ -64,7 +78,7 @@ jobs:
                       config.write('\n[http "https://github.com/"]\n\textraheader = AUTHORIZATION: basic '+auth+'\n')
               git('-C',path,'fetch','--quiet','origin','main')
               git('-C',path,'checkout','--quiet','--detach',sha)
-          # Result validation follows the workflow revision; rendering keeps the recorded revision.
+          # New executions use this run revision; existing pins remain supported.
           git('-C','.runtime','worktree','add','--quiet','--detach',str(Path('.support').resolve()),os.environ['GITHUB_SHA'])
           PY
       - name: Check exact revisions and prior completion
@@ -178,3 +192,4 @@ jobs:
           else
             echo "Execution $EXECUTION_ID: 6-second MP4 and QC artifact saved in production-runtime; result recorded in zodiac-workflow. Its separate Ingest Production Result workflow refreshes planning context." >> "$GITHUB_STEP_SUMMARY"
           fi
+

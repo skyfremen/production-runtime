@@ -21,10 +21,12 @@ def require(ok,reason):
 
 def intake(root,eid,*,source_sha,runtime_sha):
     root=Path(root); execution=load(root/f'content/executions/{eid}.json')
-    require(set(execution)=={'execution_version','execution_id','request_id','content_id','request_path','request_source_sha','request_blob_sha',
-        'item_blob_sha','contract_hash','dispatch_id','state','runtime_sha'} and execution['execution_version']==2 and execution['execution_id']==eid and
+    require({'execution_version','execution_id','request_id','content_id','request_path','request_source_sha','request_blob_sha',
+        'item_blob_sha','contract_hash','dispatch_id','state'} <= set(execution) and
+        set(execution) <= {'execution_version','execution_id','request_id','content_id','request_path','request_source_sha','request_blob_sha',
+            'item_blob_sha','contract_hash','dispatch_id','state','runtime_sha'} and execution['execution_version']==2 and execution['execution_id']==eid and
         execution['state']=='prepared' and execution['contract_hash']==CONTRACT_HASH,'EXECUTION_IDENTITY')
-    require(execution['runtime_sha']==runtime_sha,'RUNTIME_REVISION_MISMATCH')
+    require('runtime_sha' not in execution or execution['runtime_sha']==runtime_sha,'RUNTIME_REVISION_MISMATCH')
     rid=execution['request_id']; require(isinstance(rid,str) and RQ2.fullmatch(rid),'REQUEST_ID')
     require(execution['request_path']==f'content/requests/{rid}.json','REQUEST_PATH')
     require(SHA.fullmatch(str(execution['request_source_sha'])),'REQUEST_SOURCE_SHA')
@@ -70,3 +72,4 @@ def intake(root,eid,*,source_sha,runtime_sha):
             except subprocess.CalledProcessError: raise ContractRejected('SOURCE_RECORD_MISSING') from None
             require(actual==expected_raw,'SOURCE_RECORD_CHANGED')
     return request,{**item,'winner':item['zodiac'],'publish_at':item['publication']['publish_at']},execution
+

@@ -27,7 +27,7 @@ def record_result(root,result):
         'youtube_video_id','source_sha','qc_passed','artifact_name','video_sha256','publish_at'}
     if set(result)!=keys: raise ValueError('RESULT_SCHEMA')
     request,item,execution=load_execution(root,result['execution_id'],source_sha=result['source_sha'],runtime_sha=result['runtime_sha'],repository='skyfremen/zodiac-workflow')
-    for key in ('execution_id','content_id','request_id','request_blob_sha','item_blob_sha','runtime_sha'):
+    for key in ('execution_id','content_id','request_id','request_blob_sha','item_blob_sha'):
         if result.get(key)!=execution.get(key): raise ValueError('RESULT_PROVENANCE: '+key)
     if not (result['status']=='rendered' and result['visibility']=='private' and result['verified'] is True and result['qc_passed'] is True and
         result['youtube_video_id'] is None and result['artifact_name']==execution['execution_id'] and result['publish_at']==item['publish_at'] and
@@ -49,3 +49,4 @@ def main(argv=None):
     Path(a.output).write_bytes(encoded(manifest)); return 0
 
 if __name__=='__main__': raise SystemExit(main())
+

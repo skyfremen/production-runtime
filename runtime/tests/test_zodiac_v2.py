@@ -19,6 +19,41 @@ class RuntimeParityTests(unittest.TestCase):
         self.assertIn('zodiac.transport',zodiac)
         self.assertIn('zodiac.core',zodiac)
 
+    def test_workflow_selects_run_revision_or_preserves_existing_pin(self):
+        import os
+        import textwrap
+        from unittest.mock import patch
+        workflow=(Path(__file__).resolve().parents[2]/'.github/workflows/zodiac.yml').read_text()
+        step=workflow.split('name: Fetch exact source without disallowed setup actions',1)[1]
+        code=textwrap.dedent(step.split("python - <<'PY'\n",1)[1].split('\n          PY',1)[0])
+        cases=[({'execution_version':2},'',SOURCE,None),
+               ({'execution_version':2,'runtime_sha':RUNTIME},'',RUNTIME,None),
+               ({'execution_version':1,'runtime_sha':RUNTIME},RUNTIME,RUNTIME,None),
+               ({'execution_version':2},RUNTIME,None,'UNPINNED_EXECUTION_USES_RUN_REVISION'),
+               ({'execution_version':1},'',None,'LEGACY_RUNTIME_PIN_REQUIRED'),
+               ({'execution_version':2,'runtime_sha':RUNTIME},SOURCE,None,'RUNTIME_REVISION_MISMATCH')]
+        for execution,supplied,expected,error in cases:
+            with self.subTest(execution=execution,supplied=supplied),tempfile.TemporaryDirectory() as folder:
+                root=Path(folder); eid='ex-'+'a'*24
+                path=root/f'.state/content/executions/{eid}.json'; path.parent.mkdir(parents=True)
+                path.write_text(json.dumps(execution)); checkouts=[]
+                def git(args,**kwargs):
+                    if args[1]=='init': (root/args[-1]/'.git').mkdir(parents=True,exist_ok=True)
+                    if 'checkout' in args: checkouts.append((args[2],args[-1]))
+                env={'SOURCE_REPOSITORY':'skyfremen/zodiac-workflow','SOURCE_SHA':SOURCE,'RUNTIME_SHA':supplied,
+                     'EXECUTION_ID':eid,'STATE_TOKEN':'fixture','GITHUB_SHA':SOURCE,'GITHUB_ENV':str(root/'env')}
+                previous=Path.cwd()
+                try:
+                    os.chdir(root)
+                    with patch.dict(os.environ,env),patch('subprocess.run',side_effect=git):
+                        if error:
+                            with self.assertRaisesRegex(AssertionError,error): exec(code,{})
+                        else:
+                            exec(code,{})
+                            self.assertIn(('.runtime',expected),checkouts)
+                            self.assertEqual('RUNTIME_SHA='+expected+'\n',(root/'env').read_text())
+                finally: os.chdir(previous)
+
     def test_plural_catalogue_is_preferred(self):
         from zodiac.media import catalogue_paths
         with tempfile.TemporaryDirectory() as folder:
@@ -59,6 +94,43 @@ class V2IntakeTests(unittest.TestCase):
         request,item,execution=self.intake()
         self.assertEqual(self.eid,execution['execution_id'])
         self.assertEqual(self.item['zodiac'],item['winner'])
+    def test_unpinned_v2_accepts_each_run_revision_and_records_actual_revision(self):
+        self.execution.pop('runtime_sha')
+        (self.root/f'content/executions/{self.eid}.json').write_bytes(encoded(self.execution))
+        from zodiac.transport import record_result
+        for revision in (RUNTIME,'c'*40):
+            with self.subTest(revision=revision):
+                _,_,execution=load_execution(self.root,self.eid,source_sha=SOURCE,runtime_sha=revision,repository='skyfremen/zodiac-workflow')
+                self.assertNotIn('runtime_sha',execution)
+        result={**{k:self.execution[k] for k in ('execution_id','content_id','request_id','request_blob_sha','item_blob_sha')},
+            'result_version':2,'status':'rendered','visibility':'private','verified':True,'youtube_video_id':None,
+            'runtime_sha':'c'*40,'source_sha':SOURCE,'qc_passed':True,'artifact_name':self.eid,
+            'video_sha256':'d'*64,'publish_at':self.item['publication']['publish_at']}
+        target=record_result(self.root,result)
+        self.assertEqual('c'*40,json.loads(target.read_text())['runtime_sha'])
+        # Completion remains immutable even if a later run selects another revision.
+        changed={**result,'runtime_sha':RUNTIME}
+        with self.assertRaisesRegex(ValueError,'IMMUTABLE_STATE_CHANGED'):
+            record_result(self.root,changed)
+
+    def test_unpinned_production_result_uses_actual_run_revision(self):
+        from unittest.mock import patch
+        self.execution.pop('runtime_sha')
+        (self.root/f'content/executions/{self.eid}.json').write_bytes(encoded(self.execution))
+        output=self.root/'output'
+        def generate(*args,**kwargs):
+            output.mkdir(exist_ok=True)
+            (output/'manifest.json').write_text(json.dumps({'videos':[{'sha256':'d'*64}]}))
+        with patch('zodiac.cards.generate',side_effect=generate):
+            result=produce(self.root,self.eid,source_sha=SOURCE,runtime_sha='c'*40,
+                repository='skyfremen/zodiac-workflow',output=output)
+        self.assertEqual('c'*40,result['runtime_sha'])
+        self.assertEqual(self.eid,result['execution_id'])
+
+    def test_pinned_v2_still_rejects_a_different_run_revision(self):
+        with self.assertRaisesRegex(ProductionRejected,'RUNTIME_REVISION_MISMATCH'):
+            load_execution(self.root,self.eid,source_sha=SOURCE,runtime_sha='c'*40,repository='skyfremen/zodiac-workflow')
+
     def test_v2_tampered_request_is_rejected(self):
         self.request['items'][0]['zodiac']['title']='CHANGED TITLE DOES NOT MATCH ORIGINAL'
         self.path.write_bytes(encoded(self.request))
@@ -86,3 +158,4 @@ class V2IntakeTests(unittest.TestCase):
         self.assertFalse(list((self.root/'content/results').glob('*.json')))
 
 if __name__=='__main__': unittest.main()
+
