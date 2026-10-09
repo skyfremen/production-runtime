@@ -51,7 +51,6 @@ def source(asset, cache, kind):
 def catalogue_paths(root):
     data=Path(root)/'data'
     background=data/'backgrounds.json'
-    if not background.exists(): background=data/'background.json'
     return background,data/'audio.json'
 
 def prepare(root, content_id, work, cache=None):

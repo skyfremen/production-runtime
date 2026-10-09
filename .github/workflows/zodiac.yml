@@ -5,7 +5,6 @@ on:
     inputs:
       execution_id: {required: true, type: string}
       source_sha: {required: true, type: string}
-      runtime_sha: {description: Optional pin for existing executions, required: false, default: "", type: string}
 permissions:
   contents: read
   packages: read
@@ -29,7 +28,7 @@ jobs:
     env:
       EXECUTION_ID: ${{ inputs.execution_id }}
       SOURCE_SHA: ${{ inputs.source_sha }}
-      RUNTIME_SHA: ${{ inputs.runtime_sha }}
+      RUNTIME_SHA: ${{ github.sha }}
       SOURCE_REPOSITORY: skyfremen/zodiac-workflow
       PYTHONPATH: .runtime/runtime
     steps:
@@ -41,35 +40,22 @@ jobs:
           import os, re
           if not os.environ.get('STATE_TOKEN'):
               raise SystemExit('::error::ZODIAC_STATE_TOKEN_REQUIRED')
-          assert re.fullmatch(r'(?:ex|ze)-[0-9a-f]{24}',os.environ['EXECUTION_ID'])
+          assert re.fullmatch(r'ex-[0-9a-f]{24}',os.environ['EXECUTION_ID'])
           assert re.fullmatch(r'[0-9a-f]{40}',os.environ['SOURCE_SHA'])
-          assert not os.environ['RUNTIME_SHA'] or re.fullmatch(r'[0-9a-f]{40}',os.environ['RUNTIME_SHA'])
+          assert re.fullmatch(r'[0-9a-f]{40}',os.environ['RUNTIME_SHA'])
           PY
       - name: Fetch exact source without disallowed setup actions
         env:
           STATE_TOKEN: ${{ secrets.ZODIAC_STATE_TOKEN }}
         run: |
           python - <<'PY'
-          import base64, json, os, re, subprocess
+          import base64, os, subprocess
           from pathlib import Path
           def git(*args):
               subprocess.run(['git',*args],check=True)
           for path,repo,sha in (
               ('.state',os.environ['SOURCE_REPOSITORY'],os.environ['SOURCE_SHA']),
               ('.runtime','skyfremen/production-runtime',os.environ['RUNTIME_SHA'])):
-              if path=='.runtime':
-                  execution=json.loads(Path('.state/content/executions',os.environ['EXECUTION_ID']+'.json').read_text())
-                  if 'runtime_sha' in execution:
-                      sha=execution['runtime_sha']
-                      assert re.fullmatch(r'[0-9a-f]{40}',str(sha)), 'INVALID_RECORDED_RUNTIME'
-                      assert not os.environ['RUNTIME_SHA'] or os.environ['RUNTIME_SHA']==sha, 'RUNTIME_REVISION_MISMATCH'
-                  else:
-                      assert execution['execution_version']==2, 'LEGACY_RUNTIME_PIN_REQUIRED'
-                      assert not os.environ['RUNTIME_SHA'], 'UNPINNED_EXECUTION_USES_RUN_REVISION'
-                      sha=os.environ['GITHUB_SHA']
-                  assert re.fullmatch(r'[0-9a-f]{40}',sha), 'INVALID_RUN_RUNTIME'
-                  with Path(os.environ['GITHUB_ENV']).open('a') as environment:
-                      environment.write('RUNTIME_SHA='+sha+'\n')
               git('init','--quiet',path)
               git('-C',path,'remote','add','origin','https://github.com/'+repo+'.git')
               if path=='.state':
@@ -78,8 +64,6 @@ jobs:
                       config.write('\n[http "https://github.com/"]\n\textraheader = AUTHORIZATION: basic '+auth+'\n')
               git('-C',path,'fetch','--quiet','origin','main')
               git('-C',path,'checkout','--quiet','--detach',sha)
-          # New executions use this run revision; existing pins remain supported.
-          git('-C','.runtime','worktree','add','--quiet','--detach',str(Path('.support').resolve()),os.environ['GITHUB_SHA'])
           PY
       - name: Check exact revisions and prior completion
         id: prior
@@ -90,7 +74,7 @@ jobs:
           test -f .runtime/runtime/zodiac/production.py
           python - <<'PY'
           import os, re
-          assert re.fullmatch(r'(?:ex|ze)-[0-9a-f]{24}', os.environ['EXECUTION_ID'])
+          assert re.fullmatch(r'ex-[0-9a-f]{24}', os.environ['EXECUTION_ID'])
           assert all(re.fullmatch(r'[0-9a-f]{40}',os.environ[k]) for k in ('SOURCE_SHA','RUNTIME_SHA'))
           PY
           git -C .state fetch origin main
@@ -101,7 +85,7 @@ jobs:
           import json, os
           from pathlib import Path
           execution=json.load(open(Path('.state/content/executions')/(os.environ['EXECUTION_ID']+'.json')))
-          name=execution['content_id'] if execution['execution_version']==2 else execution['execution_id']
+          name=execution['content_id']
           print('content/results/'+name+'.json')
           PYCODE
           )"
@@ -113,13 +97,7 @@ jobs:
           done
           if git -C .state cat-file -e "origin/main:$result_path" 2>/dev/null; then
             git -C .state show "origin/main:$result_path" > "$RUNNER_TEMP/prior-result.json"
-            if [[ -f .support/runtime/zodiac/transport.py ]]; then
-              PYTHONPATH="$GITHUB_WORKSPACE/.support/runtime" python -m zodiac.transport result --root "$GITHUB_WORKSPACE/.state" --result "$RUNNER_TEMP/prior-result.json"
-            elif [[ -f .runtime/runtime/zodiac/transport.py ]]; then
-              python -m zodiac.transport result --root "$GITHUB_WORKSPACE/.state" --result "$RUNNER_TEMP/prior-result.json"
-            else
-              python -m zodiac.lifecycle ingest-result --root "$GITHUB_WORKSPACE/.state" --result "$RUNNER_TEMP/prior-result.json"
-            fi
+            python -m zodiac.transport result --root "$GITHUB_WORKSPACE/.state" --result "$RUNNER_TEMP/prior-result.json"
             echo "complete=true" >> "$GITHUB_OUTPUT"
           else
             echo "complete=false" >> "$GITHUB_OUTPUT"
@@ -140,17 +118,11 @@ jobs:
       - name: Produce and verify exact Zodiac execution
         if: steps.prior.outputs.complete != 'true'
         run: |
-          if [[ -f .runtime/runtime/zodiac/transport.py ]]; then
-            python -m zodiac.transport fetch --root "$GITHUB_WORKSPACE/.state" --execution-id "$EXECUTION_ID" \
-              --source-sha "$SOURCE_SHA" --runtime-sha "$RUNTIME_SHA" --repository "$SOURCE_REPOSITORY" \
-              --output "$RUNNER_TEMP/zodiac-execution.json"
-            python -m zodiac.core --manifest "$RUNNER_TEMP/zodiac-execution.json" --output "$RUNNER_TEMP/zodiac-artifact"
-          else
-            # Already committed V1 executions keep their exact old runtime.
-            python -m zodiac.production --root "$GITHUB_WORKSPACE/.state" --execution-id "$EXECUTION_ID" \
-              --source-sha "$SOURCE_SHA" --runtime-sha "$RUNTIME_SHA" \
-              --repository "$SOURCE_REPOSITORY" --output "$RUNNER_TEMP/zodiac-artifact"
-          fi
+          set -euo pipefail
+          python -m zodiac.transport fetch --root "$GITHUB_WORKSPACE/.state" --execution-id "$EXECUTION_ID" \
+            --source-sha "$SOURCE_SHA" --runtime-sha "$RUNTIME_SHA" --repository "$SOURCE_REPOSITORY" \
+            --output "$RUNNER_TEMP/zodiac-execution.json"
+          python -m zodiac.core --manifest "$RUNNER_TEMP/zodiac-execution.json" --output "$RUNNER_TEMP/zodiac-artifact"
       - name: Save passing MP4s in production-runtime's Actions run
         if: steps.prior.outputs.complete != 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -170,14 +142,7 @@ jobs:
           for attempt in 1 2 3; do
             git -C .state fetch origin main
             git -C .state reset --hard origin/main
-            if [[ -f .support/runtime/zodiac/transport.py ]]; then
-              PYTHONPATH="$GITHUB_WORKSPACE/.support/runtime" python -m zodiac.transport result --root "$GITHUB_WORKSPACE/.state" --result "$RUNNER_TEMP/zodiac-artifact/result.json"
-            elif [[ -f .runtime/runtime/zodiac/transport.py ]]; then
-              python -m zodiac.transport result --root "$GITHUB_WORKSPACE/.state" --result "$RUNNER_TEMP/zodiac-artifact/result.json"
-            else
-              python -m zodiac.lifecycle ingest-result --root "$GITHUB_WORKSPACE/.state" --result "$RUNNER_TEMP/zodiac-artifact/result.json"
-              git -C .state restore content/context.json
-            fi
+            python -m zodiac.transport result --root "$GITHUB_WORKSPACE/.state" --result "$RUNNER_TEMP/zodiac-artifact/result.json"
             git -C .state add content/results
             if git -C .state diff --cached --quiet; then exit 0; fi
             git -C .state commit -m '[zodiac result] record verified execution'

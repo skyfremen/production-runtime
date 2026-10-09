@@ -1,11 +1,15 @@
-"""Runtime-owned V2 intake contract. No planner/state construction lives here."""
+"""Runtime-owned current Zodiac intake contract. No planner/state construction lives here."""
 from datetime import datetime
-from hashlib import sha256
+from hashlib import sha1, sha256
 from pathlib import Path
 import re
+import json
+from copy import deepcopy
 import subprocess
-from .content import validate_submission
-from .lifecycle import blob, encoded, load, reconstruct, SHA, DRAFT
+from .content import validate_submission, read_json, Rejected
+REPOSITORY='skyfremen/zodiac-workflow'
+SHA=re.compile(r'^[0-9a-f]{40}$')
+DRAFT=re.compile(r'^draft-[0-9]{8}T[0-9]{6}-[0-9a-f]{8}$')
 
 CONTRACT_HASH=sha256(b'zodiac-request-v2:channel,zodiac,publication,render,youtube;artifact-only').hexdigest()
 CHANNEL={'name':'Wacky Astrology','handle':'@WackyAstrology'}
@@ -19,14 +23,59 @@ def require(ok,reason):
     if not ok: raise ContractRejected(reason)
 
 
+def encoded(value):
+    return (json.dumps(value,ensure_ascii=False,sort_keys=True,indent=2)+'\n').encode()
+
+def blob(raw): return sha1(f'blob {len(raw)}\0'.encode()+raw).hexdigest()
+
+def immutable(path, value):
+    path=Path(path); raw=encoded(value)
+    if path.exists():
+        require(path.read_bytes()==raw,'IMMUTABLE_STATE_CHANGED: '+path.name)
+        return
+    path.parent.mkdir(parents=True,exist_ok=True)
+    with path.open('xb') as file: file.write(raw)
+
+def load(path):
+    try: return read_json(path)
+    except (Rejected,OSError) as exc: raise ContractRejected(str(exc)) from None
+
+def draft_path(root,path):
+    root=Path(root).resolve(); path=Path(path)
+    if not path.is_absolute(): path=root/path
+    require(path.resolve().parent==(root/'content/drafts').resolve() and path.suffix=='.json' and DRAFT.fullmatch(path.stem),'DRAFT_PATH')
+    return path
+
+def reconstruct(root,path,seen=None):
+    path=draft_path(root,path); seen=set() if seen is None else seen
+    require(path.stem not in seen,'REPAIR_CYCLE')
+    seen.add(path.stem); require(len(seen)<=6,'REPAIR_LIMIT_EXCEEDED')
+    data=load(path); require(type(data) is dict,'DRAFT_SCHEMA')
+    if 'supersedes_draft_id' not in data: return data,seen
+    parent=data['supersedes_draft_id']; require(isinstance(parent,str) and DRAFT.fullmatch(parent),'REPAIR_PARENT')
+    failure_path=Path(root)/'content/failures'/f'{parent}.json'
+    require(failure_path.is_file(),'REPAIR_FAILURE_MISSING')
+    failure=load(failure_path); require(failure.get('repairable') is True,'REPAIR_NOT_ALLOWED')
+    old,seen=reconstruct(root,Path('content/drafts')/(parent+'.json'),seen)
+    require(data.get('winner_count')==old.get('winner_count'),'REPAIR_COUNT_CHANGED')
+    if failure.get('code')=='WINNER_COUNT_MISMATCH':
+        require(set(data)=={'winner_count','supersedes_draft_id','winners'},'COUNT_REPAIR_SCHEMA')
+        return {'winner_count':data['winner_count'],'winners':data['winners']},seen
+    require(set(data)=={'winner_count','supersedes_draft_id','replacements'},'COMPACT_REPAIR_SCHEMA')
+    replacements=data['replacements']; require(type(replacements) is list,'REPAIR_INDEX')
+    expected={w['winner_index'] for w in failure['affected_winners']}
+    require(all(type(r) is dict and set(r)=={'winner_index','winner'} and type(r['winner_index']) is int for r in replacements),'REPAIR_INDEX')
+    indexes=[r['winner_index'] for r in replacements]
+    require(len(indexes)==len(set(indexes)) and set(indexes)==expected,'REPAIR_INDEX')
+    merged=deepcopy(old)
+    for r in replacements: merged['winners'][r['winner_index']]=r['winner']
+    return merged,seen
+
 def intake(root,eid,*,source_sha,runtime_sha):
     root=Path(root); execution=load(root/f'content/executions/{eid}.json')
-    require({'execution_version','execution_id','request_id','content_id','request_path','request_source_sha','request_blob_sha',
-        'item_blob_sha','contract_hash','dispatch_id','state'} <= set(execution) and
-        set(execution) <= {'execution_version','execution_id','request_id','content_id','request_path','request_source_sha','request_blob_sha',
-            'item_blob_sha','contract_hash','dispatch_id','state','runtime_sha'} and execution['execution_version']==2 and execution['execution_id']==eid and
+    require(set(execution)=={'execution_version','execution_id','request_id','content_id','request_path','request_source_sha','request_blob_sha',
+        'item_blob_sha','contract_hash','dispatch_id','state'} and execution['execution_version']==2 and execution['execution_id']==eid and
         execution['state']=='prepared' and execution['contract_hash']==CONTRACT_HASH,'EXECUTION_IDENTITY')
-    require('runtime_sha' not in execution or execution['runtime_sha']==runtime_sha,'RUNTIME_REVISION_MISMATCH')
     rid=execution['request_id']; require(isinstance(rid,str) and RQ2.fullmatch(rid),'REQUEST_ID')
     require(execution['request_path']==f'content/requests/{rid}.json','REQUEST_PATH')
     require(SHA.fullmatch(str(execution['request_source_sha'])),'REQUEST_SOURCE_SHA')

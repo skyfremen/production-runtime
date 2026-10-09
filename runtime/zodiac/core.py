@@ -3,7 +3,7 @@ import argparse
 import json
 import subprocess
 from .production import produce
-from .lifecycle import load
+from .contract import load
 
 def main(argv=None):
     parser=argparse.ArgumentParser(); parser.add_argument('--manifest',required=True); parser.add_argument('--output',required=True)
@@ -16,3 +16,4 @@ def main(argv=None):
     print(json.dumps({'execution_id':result['execution_id'],'status':result.get('status',result.get('state')),'qc_passed':True}))
     return 0
 if __name__=='__main__': raise SystemExit(main())
+

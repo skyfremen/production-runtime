@@ -5,7 +5,7 @@ from pathlib import Path
 import re
 import subprocess
 from .production import load_execution
-from .lifecycle import encoded, load, immutable, SHA
+from .contract import encoded, load, immutable
 
 
 def record_result(root,result):
@@ -13,16 +13,7 @@ def record_result(root,result):
     cid=result.get('content_id')
     if not isinstance(cid,str) or not re.fullmatch(r'za-[a-z0-9-]{8,64}',cid): raise ValueError('RESULT_CONTENT_ID')
     if (root/'content/abandonments'/f'{cid}.json').exists(): raise ValueError('EXECUTION_ABANDONED')
-    if result.get('result_version')!=2:
-        from .lifecycle import ingest_result
-        # Legacy provenance validator rebuilds derived context in memory/on disk;
-        # restore its exact previous bytes so the runtime owns only results.
-        context=root/'content/context.json'; previous=context.read_bytes() if context.exists() else None
-        try: ingest_result(root,result)
-        finally:
-            if previous is None: context.unlink(missing_ok=True)
-            else: context.write_bytes(previous)
-        return root/f"content/results/{result['execution_id']}.json"
+    if result.get('result_version')!=2: raise ValueError('RESULT_SCHEMA')
     keys={'result_version','execution_id','content_id','request_id','request_blob_sha','item_blob_sha','runtime_sha','status','visibility','verified',
         'youtube_video_id','source_sha','qc_passed','artifact_name','video_sha256','publish_at'}
     if set(result)!=keys: raise ValueError('RESULT_SCHEMA')

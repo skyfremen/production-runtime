@@ -13,10 +13,9 @@ jobs:
     environment: exec
     timeout-minutes: 15
     env:
-      SOURCE_SHA: 1320af185f38f4d1d110e031b97fa76b044685e2
       PYTHONPATH: .runtime/runtime
     steps:
-      - name: Fetch pinned planner and current runtime
+      - name: Fetch current planner and run runtime
         env:
           STATE_TOKEN: ${{ secrets.ZODIAC_STATE_TOKEN }}
         run: |
@@ -26,7 +25,7 @@ jobs:
           token=os.environ.get('STATE_TOKEN','')
           if not token: raise SystemExit('::error::ZODIAC_STATE_TOKEN_REQUIRED')
           for path,repo,sha in (
-              ('.state','skyfremen/zodiac-workflow',os.environ['SOURCE_SHA']),
+              ('.state','skyfremen/zodiac-workflow','origin/main'),
               ('.runtime','skyfremen/production-runtime',os.environ['GITHUB_SHA'])):
               def git(*args): subprocess.run(['git','-C',path,*args],check=True)
               subprocess.run(['git','init','--quiet',path],check=True)

@@ -19,7 +19,7 @@ class CatalogueMediaTests(unittest.TestCase):
             subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','sine=frequency=220:sample_rate=48000','-t','6.25','-ac','2',str(raw)],check=True)
             v={'method':'circular_crossfade','playback_speed':.5,'source_duration_seconds':3.5,'crossfade_seconds':1,'crossfade_curve':'cosine','blend_position':'start','playback_direction':'forward'}
             a={**v,'playback_speed':1,'source_duration_seconds':6.25,'crossfade_seconds':.25}
-            for name,defaults in [('background.json',v),('audio.json',a)]:
+            for name,defaults in [('backgrounds.json',v),('audio.json',a)]:
                 (root/'data'/name).write_text(json.dumps({'version':1,'output':{'duration_seconds':6},'loop_defaults':defaults,'assets':[{'id':'fixture','loop':{'source_start_seconds':0,'gain_db':0}}]}))
             original=media.run
             def audio_only(args):
@@ -68,6 +68,6 @@ class CatalogueMediaTests(unittest.TestCase):
         from zodiac.media import prepare
         with tempfile.TemporaryDirectory() as td:
             root=Path(td);(root/'data').mkdir()
-            (root/'data'/'background.json').write_text('{"assets":[]}')
+            (root/'data'/'backgrounds.json').write_text('{"assets":[]}')
             with self.assertRaises((ValueError,FileNotFoundError)):
                 prepare(root,'za-test',root/'work')

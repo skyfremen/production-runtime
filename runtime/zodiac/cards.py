@@ -2,7 +2,7 @@
 """One-screen Zodiac lists, with optional approved footage and looped music.
 
 Pillow keeps the existing text layout; ffmpeg encodes the six-second MP4.
-Without private catalogues the legacy silent black preview remains available.
+An explicit offline preview may use black; production always supplies its catalogues.
 """
 from __future__ import annotations
 import argparse

@@ -1,33 +1,20 @@
-# Zodiac list production on shared main
+# Zodiac production on shared main
 
-The current list flow uses a single implementation in this repository:
-- `content.py`: render-time content validation and legacy contract compatibility. Private `zodiac-workflow/pipeline.py` owns planner validation.
-- `contract.py`: strict version 2 runtime intake and source/request/item identity checks.
-- `transport.py` and `core.py`: exact intake manifest, production, verified result-only writeback.
-- `lifecycle.py`: frozen compatibility helpers for existing version 1 requests/results; new planning state is owned by private `zodiac-workflow/lifecycle.py`.
-- `cards.py`: full-screen list text; H.264/AAC encoding, font fit, ffprobe and complete decode/QC.
-- `media.py`: deterministic selection from the private `data/backgrounds.json` (old pinned states may use `background.json`) and `data/audio.json`, native vertical 1080p Pexels footage, and six-second cosine loops. Music gain is the approved audition gain. Both catalogues are required together; missing or invalid assets reject production. Older states without either catalogue keep the silent black preview.
-- `production.py`: exact request/execution intake and one-video production.
-- `publish.py`: future opt-in publishing with Zodiac-only credentials, pinned channel identity and a durable upload reservation.
+Zodiac supports one current request, execution and result contract. The fixed version marker is 2; there are no older-version adapters. Earlier development requests, executions and results were reset in zodiac-workflow. Drafts, approved media and publication times remain unchanged.
 
-The private `skyfremen/zodiac-workflow` dispatches `.github/workflows/zodiac.yml` on `main`. The planner succeeds once GitHub accepts the handoff. The independent production job and MP4/QC artifact belong to **production-runtime**. Inputs are fetched from the exact private source revision using `ZODIAC_STATE_TOKEN`; only verified results are written back to zodiac-workflow; private result/context workflows own history and derived context. Both repositories maintain only `main`; new executions use the main revision selected for each production run, like Dramas. Results record the exact shared code revision actually used. Retries of unfinished new executions can pick up runtime fixes; existing pinned executions retain their original revision.
+- Private `zodiac-workflow/pipeline.py` and `lifecycle.py` own planning validation, repairs, slot allocation, immutable requests/executions, history and context.
+- `content.py` validates rendered content; `contract.py` checks the current request/execution, source commits and content hashes, and supplies result storage helpers.
+- `transport.py` and `core.py` handle exact intake, production and verified result-only writeback.
+- `production.py` always uses the private catalogues. `cards.py` renders the six-second complete list and verifies layout, streams and full decoding; `media.py` selects approved backgrounds and music from `data/backgrounds.json` and `data/audio.json`. Missing catalogues fail production. An explicit offline black preview remains available for renderer checks.
 
-The existing Wacky Dramas `single.yml`, `runtime/core.py`, transport, contracts, credentials, state and upload route are unchanged. The Zodiac workflow uses the `exec` environment with its Zodiac-specific `ZODIAC_STATE_TOKEN`, runs only here on main, and fixes its private source to skyfremen/zodiac-workflow. Never route Zodiac requests through Dramas entrypoints.
+The private dispatcher invokes `.github/workflows/zodiac.yml` on `main` with an execution ID and source commit. Runtime code uses the revision selected for that Actions run, like Dramas. Executions have no runtime pin; results record the actual runtime revision. Incomplete retries can use fixes, while completed results remain immutable and are checked before any new work.
 
-Dispatch requires `PUBLIC_PRODUCTION_TOKEN` in zodiac-workflow (Actions write on production-runtime). Runtime intake and result writes require `ZODIAC_STATE_TOKEN` in this repository's `exec` environment (Contents read/write on zodiac-workflow). Existing Dramas tokens are not replaced. Passing artifacts request 14-day retention, subject to repository limits; already completed executions skip without creating a new artifact.
+`data/publish-slots.json` is the planner's schedule. Slots are reserved in draft array order at least ten minutes ahead; reruns retain their request reservations. `publication.enabled=false` and `channel_id=null` are fixed by planner code. There is no publication configuration file or active uploader. Publishing remains a separate future phase requiring Zodiac-only channel authentication and duplicate-upload protection.
 
-## Publication slots
-The private planner's `data/publish-slots.json` owns its timezone and daily times, using the same file shape as Wacky Dramas. `content/config.json` owns publication settings. New winners receive the earliest unused slot at least 10 minutes ahead, in draft array order; reruns preserve their original immutable reservations. Older pinned states with slots in `content/config.json` remain supported. Slot configuration does not create a planning schedule or enable YouTube publication.
+Zodiac uses its own entry point and `ZODIAC_STATE_TOKEN` in the `exec` environment. The private dispatcher requires `PUBLIC_PRODUCTION_TOKEN`. Verified MP4/QC artifacts request 14-day retention in production-runtime; only results are written back. Separate private result/context workflows own history and context updates. Both repositories use only `main`.
 
-## Publication
-Default: `publication.enabled=false`, `channel_id=null`. The dispatched artifact workflow rejects enabled publication and does not receive OAuth credentials. YouTube uploading will be enabled in a separate future change. The dormant publishing module requires an actual Zodiac channel ID and Zodiac-only OAuth credentials; the Dramas channel ID is explicitly refused.
+`.github/workflows/zodiac-preview.yml` remains an explicit development catalogue preview using current planner main and the run's runtime revision. It does not reserve slots, write production records or upload to YouTube.
 
-Before any future video insertion, publishing must commit an execution reservation to the private planner's `content/uploads/` using a scoped private-state token. A known uploaded video is verified again; an uncertain reserved upload blocks a second insertion and requires reconciliation. Only verified scheduled uploads become successful publication results. No actual publication is enabled by this implementation.
+Dramas' workflow, shared core, credentials, contracts and state are unchanged. Zodiac uses the same pinned base container without dependency installs during production. The removed illustrated renderers, runtime planner, old uploader and compatibility tests are not supported paths.
 
-The older illustrated/list-envelope modules (`entrypoint.py`, `renderer.py`, `list_renderer.py`, `artifacts.py`) retain their existing backward-compatible offline behavior; they are not used by the current planner contract.
-
-## Verification
-Zodiac uses the same digest-pinned base container as Drama; the production workflow installs no dependencies during each run. New rq/ex requests/executions have version 2 common envelopes with Zodiac content fields. Existing zq/ze records and their exact runtime revisions remain supported.
-
-Run `PYTHONPATH=runtime python -m unittest discover -s runtime/tests` and the existing three runtime contract/self-test commands. Optional media tests require the already-declared Pillow, ffmpeg/ffprobe and DejaVu fonts. New synthetic flow tests exercise finalization, repair, exact identities, real MP4/QC, result ingestion and context without contacting YouTube.
-
+Verification: run the private tests with `ZODIAC_RUNTIME_PATH` set to this repository's `runtime` directory, and `PYTHONPATH=runtime python -m unittest discover -s runtime/tests`. Media tests need Pillow, ffmpeg/ffprobe and DejaVu fonts; offline contract tests do not contact YouTube.
