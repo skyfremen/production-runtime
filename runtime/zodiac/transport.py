@@ -20,9 +20,16 @@ def record_result(root,result):
     request,item,execution=load_execution(root,result['execution_id'],source_sha=result['source_sha'],runtime_sha=result['runtime_sha'],repository='skyfremen/zodiac-workflow')
     for key in ('execution_id','content_id','request_id','request_blob_sha','item_blob_sha'):
         if result.get(key)!=execution.get(key): raise ValueError('RESULT_PROVENANCE: '+key)
-    if not (result['status']=='rendered' and result['visibility']=='private' and result['verified'] is True and result['qc_passed'] is True and
-        result['youtube_video_id'] is None and result['artifact_name']==execution['execution_id'] and result['publish_at']==item['publish_at'] and
+    if not (result['verified'] is True and result['qc_passed'] is True and
+        result['artifact_name']==execution['execution_id'] and result['publish_at']==item['publish_at'] and
         re.fullmatch(r'[0-9a-f]{64}',str(result['video_sha256']))): raise ValueError('RESULT_INVALID')
+    if request['publication']['enabled']:
+        if not (result['status'] in ('scheduled','published') and result['visibility']==('private' if result['status']=='scheduled' else 'public') and
+            re.fullmatch(r'[A-Za-z0-9_-]{11}',str(result['youtube_video_id']))): raise ValueError('RESULT_INVALID')
+        from .publish import validate_recorded_result
+        validate_recorded_result(root,request,item,execution,result)
+    elif not (result['status']=='rendered' and result['visibility']=='private' and result['youtube_video_id'] is None):
+        raise ValueError('RESULT_INVALID')
     target=root/f"content/results/{result['content_id']}.json"; immutable(target,result); return target
 
 

@@ -10,6 +10,18 @@ from test_zodiac_flow import fixture, prepare_execution, SOURCE, RUNTIME
 from zodiac.contract import load
 
 class ProductionTests(unittest.TestCase):
+    def test_artifact_upload_and_remote_verification_precede_final_writeback(self):
+        source=(Path(__file__).resolve().parents[2]/'.github/workflows/zodiac.yml').read_text()
+        names=('Check Zodiac channel and recover an existing upload','Produce and verify exact Zodiac execution',
+            "Save passing MP4s in production-runtime's Actions run",'Upload verified Zodiac video and verify its schedule',
+            'Record verified result on current main')
+        positions=[source.index('- name: '+name) for name in names]
+        self.assertEqual(sorted(positions),positions)
+        for start,end in ((positions[0],positions[1]),(positions[3],positions[4])):
+            step=source[start:end]
+            for secret in ('ZODIAC_STATE_TOKEN','ZODIAC_CLIENT_ID','ZODIAC_CLIENT_SECRET','ZODIAC_REFRESH_TOKEN'):
+                self.assertIn(secret+': ${{ secrets.'+secret+' }}',step)
+        self.assertNotIn('ZODIAC_ARTIFACT_ONLY_PUBLICATION_DISABLED',source)
     def test_production_is_runtime_owned_with_fixed_private_state(self):
         source=(Path(__file__).resolve().parents[2]/'.github/workflows/zodiac.yml').read_text()
         self.assertIn('workflow_dispatch:',source)

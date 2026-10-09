@@ -97,6 +97,13 @@ jobs:
           done
           if git -C .state cat-file -e "origin/main:$result_path" 2>/dev/null; then
             git -C .state show "origin/main:$result_path" > "$RUNNER_TEMP/prior-result.json"
+            for kind in intent upload; do
+              evidence="content/executions/evidence/$content_id/$kind.json"
+              if git -C .state cat-file -e "origin/main:$evidence" 2>/dev/null; then
+                mkdir -p ".state/$(dirname "$evidence")"
+                git -C .state show "origin/main:$evidence" > ".state/$evidence"
+              fi
+            done
             python -m zodiac.transport result --root "$GITHUB_WORKSPACE/.state" --result "$RUNNER_TEMP/prior-result.json"
             echo "complete=true" >> "$GITHUB_OUTPUT"
           else
@@ -112,11 +119,22 @@ jobs:
           from zodiac.production import load_execution
           request,_,_=load_execution(Path('.state').resolve(),os.environ['EXECUTION_ID'],source_sha=os.environ['SOURCE_SHA'],
               runtime_sha=os.environ['RUNTIME_SHA'],repository=os.environ['SOURCE_REPOSITORY'])
-          if request['publication']['enabled']:
-              raise SystemExit('::error::ZODIAC_ARTIFACT_ONLY_PUBLICATION_DISABLED')
           PY
-      - name: Produce and verify exact Zodiac execution
+          python -m zodiac.transport fetch --root "$GITHUB_WORKSPACE/.state" --execution-id "$EXECUTION_ID" \
+            --source-sha "$SOURCE_SHA" --runtime-sha "$RUNTIME_SHA" --repository "$SOURCE_REPOSITORY" \
+            --output "$RUNNER_TEMP/zodiac-execution.json"
+      - name: Check Zodiac channel and recover an existing upload
+        id: publish
         if: steps.prior.outputs.complete != 'true'
+        env:
+          ZODIAC_STATE_TOKEN: ${{ secrets.ZODIAC_STATE_TOKEN }}
+          ZODIAC_CLIENT_ID: ${{ secrets.ZODIAC_CLIENT_ID }}
+          ZODIAC_CLIENT_SECRET: ${{ secrets.ZODIAC_CLIENT_SECRET }}
+          ZODIAC_REFRESH_TOKEN: ${{ secrets.ZODIAC_REFRESH_TOKEN }}
+        run: |
+          python -m zodiac.publish prepare --manifest "$RUNNER_TEMP/zodiac-execution.json" --output "$RUNNER_TEMP/zodiac-artifact"
+      - name: Produce and verify exact Zodiac execution
+        if: steps.prior.outputs.complete != 'true' && steps.publish.outputs.recovered != 'true'
         run: |
           set -euo pipefail
           python -m zodiac.transport fetch --root "$GITHUB_WORKSPACE/.state" --execution-id "$EXECUTION_ID" \
@@ -124,7 +142,7 @@ jobs:
             --output "$RUNNER_TEMP/zodiac-execution.json"
           python -m zodiac.core --manifest "$RUNNER_TEMP/zodiac-execution.json" --output "$RUNNER_TEMP/zodiac-artifact"
       - name: Save passing MP4s in production-runtime's Actions run
-        if: steps.prior.outputs.complete != 'true'
+        if: steps.prior.outputs.complete != 'true' && steps.publish.outputs.recovered != 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ${{ inputs.execution_id }}
@@ -133,6 +151,15 @@ jobs:
           retention-days: 14
           compression-level: 0
           overwrite: true
+      - name: Upload verified Zodiac video and verify its schedule
+        if: steps.prior.outputs.complete != 'true' && steps.publish.outputs.recovered != 'true'
+        env:
+          ZODIAC_STATE_TOKEN: ${{ secrets.ZODIAC_STATE_TOKEN }}
+          ZODIAC_CLIENT_ID: ${{ secrets.ZODIAC_CLIENT_ID }}
+          ZODIAC_CLIENT_SECRET: ${{ secrets.ZODIAC_CLIENT_SECRET }}
+          ZODIAC_REFRESH_TOKEN: ${{ secrets.ZODIAC_REFRESH_TOKEN }}
+        run: |
+          python -m zodiac.publish upload --manifest "$RUNNER_TEMP/zodiac-execution.json" --output "$RUNNER_TEMP/zodiac-artifact"
       - name: Record verified result on current main
         if: steps.prior.outputs.complete != 'true'
         run: |
@@ -151,10 +178,19 @@ jobs:
           echo '::error::ZODIAC_RESULT_PUSH_RETRIES_EXHAUSTED'
           exit 1
       - name: Summarize runtime completion
+        if: always()
         run: |
-          if [[ '${{ steps.prior.outputs.complete }}' == 'true' ]]; then
+          if [[ '${{ job.status }}' != 'success' ]]; then
+            echo "Execution $EXECUTION_ID failed. Check the failed step; an existing upload intent forbids a duplicate upload." >> "$GITHUB_STEP_SUMMARY"
+          elif [[ '${{ steps.prior.outputs.complete }}' == 'true' ]]; then
             echo "Execution $EXECUTION_ID already has a verified result; no new artifact was produced." >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "Execution $EXECUTION_ID: 6-second MP4 and QC artifact saved in production-runtime; result recorded in zodiac-workflow. Its separate Ingest Production Result workflow refreshes planning context." >> "$GITHUB_STEP_SUMMARY"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          result=json.load(open(Path(os.environ['RUNNER_TEMP'])/'zodiac-artifact/result.json'))
+          with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as summary:
+              summary.write(f"Execution {result['execution_id']}: {result['status']}; YouTube video {result['youtube_video_id'] or 'none'}; result recorded. Private result ingestion refreshes history/context.\n")
+          PY
           fi
 

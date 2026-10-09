@@ -84,7 +84,10 @@ def intake(root,eid,*,source_sha,runtime_sha):
     request=load(path)
     require(set(request)=={'request_version','request_id','source_draft_id','draft_blob_sha','draft_source_sha','publication','items'} and
         request['request_version']==2 and request['request_id']==rid,'REQUEST_SCHEMA')
-    require(request['publication']=={'enabled':False,'channel_id':None},'ZODIAC_ARTIFACT_ONLY_PUBLICATION_DISABLED')
+    publication=request['publication']
+    require(type(publication) is dict and set(publication)=={'enabled','channel_id'} and type(publication['enabled']) is bool and
+        (bool(re.fullmatch(r'UC[A-Za-z0-9_-]{22}',str(publication['channel_id']))) if publication['enabled'] else publication['channel_id'] is None),
+        'REQUEST_PUBLICATION_CONFIGURATION')
     did=request['source_draft_id']; require(isinstance(did,str) and DRAFT.fullmatch(did),'REQUEST_DRAFT_ID')
     require(SHA.fullmatch(str(request['draft_source_sha'])),'DRAFT_SOURCE_SHA')
     draft=root/f'content/drafts/{did}.json'
@@ -98,7 +101,8 @@ def intake(root,eid,*,source_sha,runtime_sha):
             item['visibility']=='private' and item['content_id']==item['zodiac'].get('id'),'REQUEST_ITEM_IDENTITY')
         require(type(item['youtube']) is dict and set(item['youtube'])=={'title','description','hashtags','made_for_kids'} and
             item['youtube']['title']==item['zodiac']['title'] and item['youtube']['made_for_kids'] is False,'REQUEST_YOUTUBE')
-        pub=item['publication']; require(type(pub) is dict and set(pub)=={'mode','publish_at'} and pub['mode']=='artifact','REQUEST_PUBLICATION')
+        pub=item['publication']; require(type(pub) is dict and set(pub)=={'mode','publish_at'} and
+            pub['mode']==('scheduled' if publication['enabled'] else 'artifact'),'REQUEST_PUBLICATION')
         at=pub['publish_at']; require(isinstance(at,str) and re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:00Z',at),'REQUEST_PUBLISH_AT')
         try: datetime.fromisoformat(at.replace('Z','+00:00'))
         except ValueError: raise ContractRejected('REQUEST_PUBLISH_AT') from None
