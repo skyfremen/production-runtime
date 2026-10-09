@@ -26,7 +26,7 @@ class MemoryState:
         return SimpleNamespace(data=deepcopy(data),created=self.fresh)
 
 class FakeYouTube:
-    def __init__(self): self.inserts=0; self.body=None; self.remote=[]; self.fail_insert=False
+    def __init__(self): self.inserts=0; self.body=None; self.remote=[]; self.fail_insert=False; self.video_checks=0
     def channels(self): return self
     def playlistItems(self): return self
     def videos(self): return self
@@ -36,6 +36,7 @@ class FakeYouTube:
         elif kwargs.get('playlistId'):
             data={'items':[{'contentDetails':{'videoId':v['id']}} for v in self.remote]}
         else:
+            self.video_checks+=1
             ids=kwargs['id'].split(','); data={'items':[v for v in self.remote if v['id'] in ids]}
         return SimpleNamespace(execute=lambda:deepcopy(data))
     def insert(self,**kwargs):
@@ -123,6 +124,41 @@ class PublishingTests(unittest.TestCase):
         evidence=self.upload(); self.youtube.remote[0]['status']['uploadStatus']='uploaded'
         with self.assertRaisesRegex(self.publisher.RecoveryBlocked,'pending'):
             self.publisher.verify(self.youtube,self.request,self.item,self.identity,evidence,self.result,sleep=lambda _:None)
+        self.assertEqual(1,self.youtube.inserts)
+
+    def test_processing_can_finish_in_a_later_window_without_reupload(self):
+        evidence=self.upload(); self.youtube.remote[0]['status']['uploadStatus']='uploaded'
+        self.youtube.video_checks=0; delays=[]
+        def sleep(delay):
+            delays.append(delay)
+            if delay==60: self.youtube.remote[0]['status']['uploadStatus']='processed'
+        with redirect_stdout(StringIO()):
+            result=self.publisher.verify(self.youtube,self.request,self.item,self.identity,evidence,self.result,sleep=sleep)
+        self.assertEqual('scheduled',result['status'])
+        self.assertEqual(VIDEO,result['youtube_video_id'])
+        self.assertEqual(13,self.youtube.video_checks)
+        self.assertIn(60,delays)
+        self.assertNotIn(120,delays)
+        self.assertEqual(1,self.youtube.inserts)
+
+    def test_processing_stops_after_three_windows_and_preserves_upload(self):
+        evidence=self.upload(); self.youtube.remote[0]['status']['uploadStatus']='uploaded'
+        self.youtube.video_checks=0; delays=[]; records=deepcopy(self.state.records)
+        with redirect_stdout(StringIO()), self.assertRaisesRegex(self.publisher.RecoveryBlocked,'pending'):
+            self.publisher.verify(self.youtube,self.request,self.item,self.identity,evidence,self.result,sleep=delays.append)
+        self.assertEqual(36,self.youtube.video_checks)
+        self.assertEqual(897,sum(delays))
+        self.assertEqual(1,delays.count(60)); self.assertEqual(1,delays.count(120))
+        self.assertEqual(records,self.state.records)
+        self.assertEqual(1,self.youtube.inserts)
+
+    def test_metadata_error_stops_without_waiting_for_another_window(self):
+        evidence=self.upload(); self.youtube.remote[0]['snippet']['title']='Unexpected title'
+        self.youtube.video_checks=0; delays=[]
+        with self.assertRaisesRegex(self.publisher.RecoveryBlocked,'metadata'):
+            self.publisher.verify(self.youtube,self.request,self.item,self.identity,evidence,self.result,sleep=delays.append)
+        self.assertEqual(1,self.youtube.video_checks)
+        self.assertEqual([],delays)
         self.assertEqual(1,self.youtube.inserts)
 
     def test_pending_verification_reports_safe_existing_video_state(self):

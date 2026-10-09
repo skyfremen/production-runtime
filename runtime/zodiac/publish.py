@@ -14,6 +14,11 @@ from .production import load_execution
 VIDEO_ID=re.compile(r'^[A-Za-z0-9_-]{11}$')
 CONTENT_ID=re.compile(r'^za-[a-z0-9-]{8,64}$')
 IDENTITY_FIELDS=('execution_id','content_id','request_id','request_path','request_source_sha','request_blob_sha','item_blob_sha')
+# Match the bounded verification windows in runtime/core.py for Wacky Dramas.
+VERIFY_RETRY_DELAYS=(0,60,120)
+
+class VerificationPending(RecoveryBlocked):
+    pass
 
 def require(ok,message):
     if not ok: raise RecoveryBlocked('Zodiac publishing: '+message)
@@ -134,7 +139,7 @@ def upload(state,youtube,request,item,identity,video,result):
         record=upload_record(stored.data,(response or {}).get('id'),'videos.insert')
     return state.create(evidence_path(identity['content_id'],'upload'),record).data
 
-def verify(youtube,request,item,identity,evidence,result,*,sleep=time.sleep):
+def _verify_window(youtube,request,item,identity,evidence,result,*,sleep=time.sleep):
     check_evidence(evidence,identity,'upload'); channel=channel_for(youtube,request)
     require(evidence.get('expected_channel_id')==channel['id'],'evidence belongs to another channel')
     expected=upload_body(item)
@@ -170,7 +175,18 @@ def verify(youtube,request,item,identity,evidence,result,*,sleep=time.sleep):
             outcome='published'
         else: raise RecoveryBlocked('Zodiac publishing: unexpected visibility for the reserved slot')
         return {**result,'status':outcome,'visibility':privacy,'youtube_video_id':video_id,'verified':True}
-    raise RecoveryBlocked('Zodiac publishing: remote verification pending; '+last_observation+'; rerun to verify the same upload')
+    raise VerificationPending('Zodiac publishing: remote verification pending; '+last_observation+'; rerun to verify the same upload')
+
+def verify(youtube,request,item,identity,evidence,result,*,sleep=time.sleep):
+    for window,delay in enumerate(VERIFY_RETRY_DELAYS,1):
+        if delay:
+            print(f'Zodiac verification still pending; retrying verification only in {delay}s '
+                f'(window {window}/{len(VERIFY_RETRY_DELAYS)})',flush=True)
+            sleep(delay)
+        try:
+            return _verify_window(youtube,request,item,identity,evidence,result,sleep=sleep)
+        except VerificationPending:
+            if window==len(VERIFY_RETRY_DELAYS): raise
 
 def validate_recorded_result(root,request,item,execution,result):
     identity=identity_for(execution); records={}
