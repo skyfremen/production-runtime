@@ -81,7 +81,11 @@ class CurrentContractTests(unittest.TestCase):
         def generate(*args,**kwargs):
             output.mkdir(exist_ok=True)
             (output/'manifest.json').write_text(json.dumps({'videos':[{'sha256':'d'*64}]}))
-        with patch('zodiac.cards.generate',side_effect=generate):
+        from types import ModuleType
+        renderer=ModuleType('zodiac.cards')
+        renderer.generate=generate
+        # This contract test mocks rendering and must run without media dependencies.
+        with patch.dict('sys.modules',{'zodiac.cards':renderer}):
             result=produce(self.root,self.eid,source_sha=SOURCE,runtime_sha='c'*40,
                 repository='skyfremen/zodiac-workflow',output=output)
         self.assertEqual('c'*40,result['runtime_sha'])
