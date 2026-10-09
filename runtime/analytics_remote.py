@@ -182,6 +182,10 @@ def main():
     token = str(os.environ.get("PRIVATE_STATE_TOKEN") or "").strip()
     planner = GitHubRepository(os.environ.get("PRIVATE_STATE_REPOSITORY", ""), token, "planner")
     warehouse = GitHubRepository(os.environ.get("ANALYTICS_DATA_REPOSITORY", ""), token, "warehouse")
+    return run_remote(planner, warehouse)
+
+
+def run_remote(planner: GitHubRepository, warehouse: GitHubRepository, runner=run):
     collected_at = now_utc()
     last = None
     for attempt in range(1, 4):
@@ -191,7 +195,7 @@ def main():
             warehouse_sha = warehouse.head_sha()
             planner_root = planner.download_tree(planner_sha, work)
             warehouse_root = warehouse.download_tree(warehouse_sha, work)
-            outputs = run(planner_root, warehouse_root, collected_at)
+            outputs = runner(planner_root, warehouse_root, collected_at)
             warehouse_commit = warehouse.commit_files(warehouse_sha, warehouse_root, outputs.warehouse_files)
             planner_commit = planner.commit_files(planner_sha, planner_root, outputs.planner_files)
             print(

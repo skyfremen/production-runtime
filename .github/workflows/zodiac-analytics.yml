@@ -1,0 +1,35 @@
+name: Zodiac Analytics
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zodiac-analytics
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: exec
+    env:
+      ZODIAC_STATE_TOKEN: ${{ secrets.ZODIAC_STATE_TOKEN }}
+      ZODIAC_CLIENT_ID: ${{ secrets.ZODIAC_CLIENT_ID }}
+      ZODIAC_CLIENT_SECRET: ${{ secrets.ZODIAC_CLIENT_SECRET }}
+      ZODIAC_REFRESH_TOKEN: ${{ secrets.ZODIAC_REFRESH_TOKEN }}
+    steps:
+      - name: Load exact runtime source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os, urllib.request
+          url=f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/tarball/{os.environ['GITHUB_SHA']}"
+          urllib.request.urlretrieve(url,"/tmp/runtime-source.tgz")
+          PY
+          tar --extract --gzip --file /tmp/runtime-source.tgz --strip-components 1 --directory "${GITHUB_WORKSPACE}"
+      - name: Collect Zodiac analytics and refresh its planner context
+        run: PYTHONPATH=runtime python -m zodiac.analytics

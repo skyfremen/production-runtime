@@ -41,6 +41,24 @@ OPTIONAL_ANALYTICS_REPORTS = {
 }
 
 
+@dataclass(frozen=True)
+class AnalyticsProfile:
+    lane: str = 'drama'
+    content_id_re: object = CID_RE
+    result_glob: str = 'wd-*.json'
+    credential_names: tuple = ('RUNTIME_AUTH_A', 'RUNTIME_AUTH_B', 'RUNTIME_AUTH_C')
+    warehouse_repository: str = 'skyfremen/youtube-analytics-data'
+    schema_name: str = 'wacky-dramas-youtube-analytics'
+    creative_loader: object = None
+    result_filter: object = None
+    channel_guard: object = None
+    summary_adapter: object = None
+    projection_builder: object = None
+
+
+DRAMA = AnalyticsProfile()
+
+
 @dataclass
 class AnalyticsOutputs:
     planner_files: list[Path]
@@ -84,11 +102,11 @@ def credential(name: str) -> str:
     return value
 
 
-def access_token() -> str:
+def access_token(profile: AnalyticsProfile = DRAMA) -> str:
     body = urlencode({
-        "client_id": credential("RUNTIME_AUTH_A"),
-        "client_secret": credential("RUNTIME_AUTH_B"),
-        "refresh_token": credential("RUNTIME_AUTH_C"),
+        "client_id": credential(profile.credential_names[0]),
+        "client_secret": credential(profile.credential_names[1]),
+        "refresh_token": credential(profile.credential_names[2]),
         "grant_type": "refresh_token",
     }).encode()
     req = Request("https://oauth2.googleapis.com/token", data=body, method="POST",
@@ -195,6 +213,16 @@ def metric_int(value) -> int:
         return 0
 
 
+def optional_metric_int(value) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+        return int(number) if math.isfinite(number) and number >= 0 else None
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
 def collect_optional_analytics_reports(token: str, now: datetime, report_fn=analytics_report) -> tuple[dict, list[str]]:
     start = (now - timedelta(days=WINDOW_DAYS)).date().isoformat()
     end = now.date().isoformat()
@@ -224,7 +252,7 @@ def collect_optional_analytics_reports(token: str, now: datetime, report_fn=anal
 
 
 def collect_per_video_traffic_sources(
-    rows: list[dict], token: str, now: datetime, report_fn=analytics_report
+    rows: list[dict], token: str, now: datetime, report_fn=analytics_report, *, preserve_nulls=False
 ) -> tuple[dict[str, dict], list[str]]:
     if not rows:
         return {}, []
@@ -248,12 +276,12 @@ def collect_per_video_traffic_sources(
                 if str(item.get("insightTrafficSourceType", "")).upper() != "SHORTS":
                     continue
                 video_id = str(item.get("video") or "")
-                views = metric_int(item.get("views"))
-                engaged = metric_int(item.get("engagedViews"))
+                views = (optional_metric_int if preserve_nulls else metric_int)(item.get("views"))
+                engaged = (optional_metric_int if preserve_nulls else metric_int)(item.get("engagedViews"))
                 output[video_id] = {
                     "shorts_source_views": views,
                     "shorts_source_engaged_views": engaged,
-                    "shorts_source_engaged_view_rate_percentage": round((engaged / views) * 100, 2) if views else None,
+                    "shorts_source_engaged_view_rate_percentage": round((engaged / views) * 100, 2) if views and engaged is not None else None,
                     "shorts_source_estimated_minutes_watched": item.get("estimatedMinutesWatched"),
                 }
         except Exception as exc:
@@ -313,10 +341,10 @@ def load_creative_map(root: Path) -> dict[str, dict]:
     return out
 
 
-def eligible_videos(root: Path, creative: dict[str, dict], now: datetime) -> list[dict]:
+def eligible_videos(root: Path, creative: dict[str, dict], now: datetime, *, profile: AnalyticsProfile = DRAMA) -> list[dict]:
     cutoff = now - timedelta(days=WINDOW_DAYS)
     rows = []
-    for path in sorted((root / "content" / "results").glob("wd-*.json")):
+    for path in sorted((root / "content" / "results").glob(profile.result_glob)):
         try:
             result = read_json(path)
             cid = str(result.get("content_id", ""))
@@ -324,9 +352,11 @@ def eligible_videos(root: Path, creative: dict[str, dict], now: datetime) -> lis
             published = parse_dt(str(result.get("publish_at") or result.get("published_at") or ""))
         except Exception:
             continue
-        if not CID_RE.fullmatch(cid) or not VIDEO_RE.fullmatch(vid):
+        if not profile.content_id_re.fullmatch(cid) or not VIDEO_RE.fullmatch(vid):
             continue
         if published > now or published < cutoff:
+            continue
+        if profile.result_filter and not profile.result_filter(root, result, creative):
             continue
         rows.append({
             "content_id": cid,
@@ -417,16 +447,16 @@ def collect_analytics_api(rows: list[dict], token: str, now: datetime) -> tuple[
     return out, True, warnings
 
 
-def snapshot(root: Path, token: str | None = None, now: datetime | None = None) -> dict:
+def snapshot(root: Path, token: str | None = None, now: datetime | None = None, *, profile: AnalyticsProfile = DRAMA) -> dict:
     now = now or now_utc()
-    creative = load_creative_map(root)
-    rows = eligible_videos(root, creative, now)
-    token = token or access_token()
+    creative = (profile.creative_loader or load_creative_map)(root)
+    rows = eligible_videos(root, creative, now, profile=profile)
+    token = token or access_token(profile)
     current = collect_data_api(rows, token)
     live_rows = [row for row in rows if row["youtube_video_id"] in current]
     detailed, detailed_ok, detailed_warnings = collect_analytics_api(live_rows, token, now)
     analytics_reports, report_warnings = collect_optional_analytics_reports(token, now)
-    per_video_traffic, traffic_warnings = collect_per_video_traffic_sources(live_rows, token, now)
+    per_video_traffic, traffic_warnings = collect_per_video_traffic_sources(live_rows, token, now) if profile is DRAMA else collect_per_video_traffic_sources(live_rows, token, now, preserve_nulls=True)
     videos = []
     for row in live_rows:
         vid = row["youtube_video_id"]
@@ -465,11 +495,11 @@ def snapshot(root: Path, token: str | None = None, now: datetime | None = None) 
     }
 
 
-def all_snapshots(root: Path, current: dict) -> list[dict]:
+def all_snapshots(root: Path, current: dict, *, cid_re=CID_RE) -> list[dict]:
     live_cids = {
         str(item.get("content_id", ""))
         for item in current.get("videos", [])
-        if isinstance(item, dict) and CID_RE.fullmatch(str(item.get("content_id", "")))
+        if isinstance(item, dict) and cid_re.fullmatch(str(item.get("content_id", "")))
     }
     docs = []
     paths = list((root / "realtime").glob("*/*.json")) + list((root / "realtime" / "legacy").glob("analytics-*.json"))
@@ -542,12 +572,12 @@ def publish_slot_sgt(value) -> str:
         return "unknown"
 
 
-def performance_rows(snapshots: list[dict]) -> list[dict]:
+def performance_rows(snapshots: list[dict], *, cid_re=CID_RE) -> list[dict]:
     by_cid: dict[str, list[dict]] = {}
     for snap in snapshots:
         for item in snap.get("videos", []):
             cid = str(item.get("content_id", ""))
-            if CID_RE.fullmatch(cid):
+            if cid_re.fullmatch(cid):
                 by_cid.setdefault(cid, []).append(item)
     out = []
     for cid, obs in by_cid.items():
@@ -811,7 +841,7 @@ def planner_projection(summary: dict) -> dict:
     return projection
 
 
-def report_analysis(current: dict, report_name: str, dimension_keys: tuple[str, ...], limit: int = 50) -> dict:
+def report_analysis(current: dict, report_name: str, dimension_keys: tuple[str, ...], limit: int = 50, *, preserve_nulls=False) -> dict:
     report = (current.get("analytics_reports") or {}).get(report_name) or {}
     if not report:
         legacy_key = {"geography": "geography", "traffic_source": "traffic_sources"}.get(report_name)
@@ -838,9 +868,9 @@ def report_analysis(current: dict, report_name: str, dimension_keys: tuple[str, 
         ):
             if row.get(source) is not None:
                 item[target] = row[source]
-        views = metric_int(row.get("views"))
-        engaged = metric_int(row.get("engagedViews"))
-        if views:
+        views = (optional_metric_int if preserve_nulls else metric_int)(row.get("views"))
+        engaged = (optional_metric_int if preserve_nulls else metric_int)(row.get("engagedViews"))
+        if views and engaged is not None:
             item["engaged_view_rate_percentage"] = round((engaged / views) * 100, 2)
         rows.append(item)
     rows.sort(key=lambda item: (-float(item.get("views", item.get("viewer_percentage", item.get("shares", 0))) or 0), json.dumps(item, sort_keys=True)))
@@ -851,11 +881,13 @@ def report_analysis(current: dict, report_name: str, dimension_keys: tuple[str, 
     return {"sample_rows": len(rows), "views_total": total, "top": rows[:limit]}
 
 
-def retention_pattern_summary(root: Path) -> dict:
+def retention_pattern_summary(root: Path, *, video_ids=None) -> dict:
     curves = []
     for path in sorted((root / "retention").glob("*/*.json")):
         try:
             payload = read_json(path)
+            if video_ids is not None and payload.get("video_id") not in video_ids:
+                continue
             headers = [str(item.get("name")) for item in payload.get("column_headers", [])]
             points = [dict(zip(headers, values)) for values in payload.get("rows", [])]
             usable = [point for point in points if isinstance(point.get("elapsedVideoTimeRatio"), (int, float)) and isinstance(point.get("audienceWatchRatio"), (int, float))]
@@ -929,8 +961,8 @@ def shorts_feed_diagnostics(rows: list[dict]) -> dict:
     }
 
 
-def build_summary(root: Path, current: dict) -> dict:
-    rows = performance_rows(all_snapshots(root, current))
+def build_summary(root: Path, current: dict, *, profile: AnalyticsProfile = DRAMA) -> dict:
+    rows = performance_rows(all_snapshots(root, current, cid_re=profile.content_id_re), cid_re=profile.content_id_re)
     rank_key = None
     for key in ("views_7d", "views_72h", "views_24h", "views_6h", "views_2h"):
         if sum(r.get(key) is not None for r in rows) >= 5:
@@ -944,6 +976,8 @@ def build_summary(root: Path, current: dict) -> dict:
     weak = sorted(mature, key=lambda r: float(r.get("retention") or 0))[:5]
     categories = sorted({r.get("category", "unknown") for r in rows if r.get("category")})
     counts = {c: sum(r.get("category") == c for r in rows) for c in categories}
+    def analysis(*args):
+        return report_analysis(*args, preserve_nulls=profile is not DRAMA)
     summary = {
         "analytics_version": ANALYTICS_VERSION,
         "generated_at": current["collected_at"],
@@ -962,25 +996,25 @@ def build_summary(root: Path, current: dict) -> dict:
         "publish_hour_performance_sgt": group_summary(rows, "publish_hour_sgt"),
         "publish_slot_performance_sgt": group_summary(rows, "publish_slot_sgt"),
         "publication_spacing_performance": publication_spacing_summary(rows),
-        "geography_analysis": report_analysis(current, "geography", ("country",), 50),
-        "traffic_source_analysis": report_analysis(current, "traffic_source", ("insightTrafficSourceType",), 50),
-        "playback_location_analysis": report_analysis(current, "playback_location", ("insightPlaybackLocationType",), 50),
-        "device_operating_system_analysis": report_analysis(current, "device_os", ("deviceType", "operatingSystem"), 100),
-        "subscriber_status_analysis": report_analysis(current, "subscriber_status", ("subscribedStatus",), 20),
-        "demographics_analysis": report_analysis(current, "demographics", ("ageGroup", "gender"), 50),
-        "sharing_analysis": report_analysis(current, "sharing", ("sharingService",), 50),
-        "creator_content_type_analysis": report_analysis(current, "creator_content_type", ("creatorContentType",), 20),
+        "geography_analysis": analysis(current, "geography", ("country",), 50),
+        "traffic_source_analysis": analysis(current, "traffic_source", ("insightTrafficSourceType",), 50),
+        "playback_location_analysis": analysis(current, "playback_location", ("insightPlaybackLocationType",), 50),
+        "device_operating_system_analysis": analysis(current, "device_os", ("deviceType", "operatingSystem"), 100),
+        "subscriber_status_analysis": analysis(current, "subscriber_status", ("subscribedStatus",), 20),
+        "demographics_analysis": analysis(current, "demographics", ("ageGroup", "gender"), 50),
+        "sharing_analysis": analysis(current, "sharing", ("sharingService",), 50),
+        "creator_content_type_analysis": analysis(current, "creator_content_type", ("creatorContentType",), 20),
         "shorts_feed_diagnostics": shorts_feed_diagnostics(rows),
-        "retention_patterns": retention_pattern_summary(root),
+        "retention_patterns": retention_pattern_summary(root) if profile is DRAMA else retention_pattern_summary(root, video_ids={v.get("youtube_video_id") for v in current.get("videos", [])}),
         "top_examples": [compact_example(r) for r in top],
         "weak_retention_examples": [compact_example(r) for r in weak],
         "low_sample_categories": [{"category": c, "sample_size": counts[c]} for c in categories if counts[c] < 5],
         "warnings": list(current.get("warnings") or []),
     }
-    return summary
+    return profile.summary_adapter(summary, rows, current, root) if profile.summary_adapter else summary
 
 
-def build_analytics_index(root: Path, summary: dict, warnings: list[str]) -> dict:
+def build_analytics_index(root: Path, summary: dict, warnings: list[str], *, profile: AnalyticsProfile = DRAMA) -> dict:
     latest_snapshots = list((root / "realtime").glob("*/*.json"))
     latest_snapshot = max(latest_snapshots, key=lambda path: path.name, default=None)
     targeted_reports = {}
@@ -1003,7 +1037,7 @@ def build_analytics_index(root: Path, summary: dict, warnings: list[str]) -> dic
     def exists(pattern):
         return any(root.glob(pattern))
     return {
-        "analytics_repository": "skyfremen/youtube-analytics-data",
+        "analytics_repository": profile.warehouse_repository,
         "analytics_version": ANALYTICS_VERSION,
         "generated_at": summary.get("generated_at"),
         "available_datasets": {
@@ -1056,10 +1090,20 @@ def rebuild_planner_context(root: Path) -> Path:
     return root / "content" / "context.json"
 
 
-def run(planner_root: Path, warehouse_root: Path, collected_at: datetime | None = None) -> AnalyticsOutputs:
+def run(planner_root: Path, warehouse_root: Path, collected_at: datetime | None = None, *, profile: AnalyticsProfile = DRAMA) -> AnalyticsOutputs:
     collected_at = collected_at or now_utc()
-    token = access_token()
-    current = snapshot(planner_root, token, collected_at)
+    token = access_token() if profile is DRAMA else access_token(profile)
+    channel_id = profile.channel_guard(planner_root, token) if profile.channel_guard else None
+    if channel_id:
+        stored_channel = load_manifest(warehouse_root / 'manifest' / 'collection-state.json', {}).get('channel_id')
+        stored_schema = load_manifest(warehouse_root / 'manifest' / 'schema-version.json', {}).get('schema')
+        if stored_channel not in (None, channel_id):
+            raise RuntimeError('Analytics warehouse channel differs from authenticated channel')
+        if stored_schema not in (None, profile.schema_name):
+            raise RuntimeError('Analytics warehouse schema belongs to another channel profile')
+    current = snapshot(planner_root, token, collected_at) if profile is DRAMA else snapshot(planner_root, token, collected_at, profile=profile)
+    if channel_id:
+        current.update(lane=profile.lane, channel_id=channel_id)
     stamp = current["collected_at"].replace("-", "").replace(":", "")
     snap_path = warehouse_root / "realtime" / collected_at.date().isoformat() / f"analytics-{stamp}.json"
     warehouse_files = [snap_path, *migrate_legacy_snapshots(planner_root, warehouse_root)]
@@ -1085,6 +1129,8 @@ def run(planner_root: Path, warehouse_root: Path, collected_at: datetime | None 
     )
     warehouse_files.extend(retention.files)
     warnings.extend(retention.warnings)
+    if channel_id:
+        state["channel_id"] = channel_id
     state["analytics_version"] = ANALYTICS_VERSION
     state["latest_realtime_snapshot"] = snap_path.relative_to(warehouse_root).as_posix()
     state["updated_at"] = current["collected_at"]
@@ -1092,16 +1138,17 @@ def run(planner_root: Path, warehouse_root: Path, collected_at: datetime | None 
     write_json(state_path, state)
     write_json(schema_path, {
         "analytics_version": ANALYTICS_VERSION,
-        "schema": "wacky-dramas-youtube-analytics",
+        "schema": profile.schema_name,
+        **({"channel_id": channel_id} if channel_id else {}),
         "updated_at": current["collected_at"],
     })
     warehouse_files.extend((jobs_path, state_path, schema_path))
 
     current["warnings"] = warnings
     write_json(snap_path, current)
-    summary = build_summary(warehouse_root, current)
-    projection = planner_projection(summary)
-    index = build_analytics_index(warehouse_root, summary, warnings)
+    summary = build_summary(warehouse_root, current) if profile is DRAMA else build_summary(warehouse_root, current, profile=profile)
+    projection = (profile.projection_builder or planner_projection)(summary)
+    index = build_analytics_index(warehouse_root, summary, warnings, profile=profile)
     summary_path = planner_root / "content" / "analytics-summary.json"
     projection_path = planner_root / "content" / "planner-analytics.json"
     index_path = planner_root / "content" / "analytics-index.json"
