@@ -11,6 +11,7 @@ import shutil
 import statistics
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -55,6 +56,7 @@ class AnalyticsProfile:
     summary_adapter: object = None
     projection_builder: object = None
     optional_error_details: bool = False
+    optional_report_attempts: int = 1
 
 
 DRAMA = AnalyticsProfile()
@@ -246,16 +248,17 @@ def analytics_error_detail(exc: Exception) -> str:
             message = str(error.get("message", "")).strip().rstrip(".").casefold()
             if message in known_messages:
                 details.append(known_messages[message])
-    except (OSError, ValueError, TypeError, AttributeError):
+    except (OSError, ValueError, TypeError, AttributeError, RecursionError):
         pass
     return f"{type(exc).__name__} ({'; '.join(details)})"
 
 
-def collect_optional_analytics_reports(token: str, now: datetime, report_fn=analytics_report, *, error_details=False) -> tuple[dict, list[str]]:
+def collect_optional_analytics_reports(token: str, now: datetime, report_fn=analytics_report, *, error_details=False, attempts=1) -> tuple[dict, list[str]]:
     start = (now - timedelta(days=WINDOW_DAYS)).date().isoformat()
     end = now.date().isoformat()
     reports = {}
     warnings = []
+    attempts = max(1, min(int(attempts), 3))
     for name, (dimensions, metrics, maximum) in OPTIONAL_ANALYTICS_REPORTS.items():
         try:
             params = {
@@ -268,7 +271,15 @@ def collect_optional_analytics_reports(token: str, now: datetime, report_fn=anal
             }
             if "views" in metrics:
                 params["sort"] = "-views"
-            report = analytics_report_all(params, token, report_fn)
+            for attempt in range(attempts):
+                try:
+                    report = analytics_report_all(params, token, report_fn)
+                    break
+                except HTTPError as exc:
+                    if exc.code not in {429, 500, 502, 503, 504} or attempt == attempts - 1:
+                        raise
+                    exc.close()
+                    time.sleep(2 ** attempt)
             reports[name] = {
                 "dimensions": dimensions.split(","),
                 "metrics": metrics.split(","),
@@ -484,8 +495,9 @@ def snapshot(root: Path, token: str | None = None, now: datetime | None = None, 
     current = collect_data_api(rows, token)
     live_rows = [row for row in rows if row["youtube_video_id"] in current]
     detailed, detailed_ok, detailed_warnings = collect_analytics_api(live_rows, token, now)
-    if profile.optional_error_details:
-        analytics_reports, report_warnings = collect_optional_analytics_reports(token, now, error_details=True)
+    if profile.optional_error_details or profile.optional_report_attempts > 1:
+        analytics_reports, report_warnings = collect_optional_analytics_reports(
+            token, now, error_details=profile.optional_error_details, attempts=profile.optional_report_attempts)
     else:
         analytics_reports, report_warnings = collect_optional_analytics_reports(token, now)
     per_video_traffic, traffic_warnings = collect_per_video_traffic_sources(live_rows, token, now) if profile is DRAMA else collect_per_video_traffic_sources(live_rows, token, now, preserve_nulls=True)

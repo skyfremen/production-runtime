@@ -26,6 +26,8 @@ Verification: run the private tests with `ZODIAC_RUNTIME_PATH` set to this repos
 
 Collection authenticates `@WackyAstrology`, checks request channel IDs and warehouse identity, selects verified published/scheduled results whose slots have arrived in the last 30 days, and excludes abandoned/cancelled content. Data API, targeted Analytics reports, Reporting job discovery/CSV downloads and retryable 72h/7d retention use the same engine as Drama. Optional reports remain warnings. Native creative comparisons use four formats and headline-word-count buckets; no unrecorded story or semantic hook labels are inferred.
 
+Zodiac optional targeted reports retry HTTP 429/500/502/503/504 at most three times, with one- and two-second backoff. Invalid-query and authorization failures are not retried. Final warnings include the HTTP status and allowlisted API error classifications; raw response messages, URLs and credentials are never included. Unavailable reports remain missing, not measured zeroes. Drama keeps its existing one-attempt behavior.
+
 Runtime commits raw/realtime/retention/manifests to private `skyfremen/zodiac-analytics-data`, then detailed summary, <=16KB compact projection and index to `skyfremen/zodiac-workflow`. The planner context builder alone embeds the projection. Main ref races retry at most three times and write allowlists cannot modify drafts, code or publication slots.
 
 Activation:

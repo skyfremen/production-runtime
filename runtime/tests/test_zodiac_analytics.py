@@ -1,5 +1,6 @@
 import importlib.util
 import io
+import inspect
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,6 +32,44 @@ def observation(age=72,views=1000,ratio=40,cid=CID,format='sign_results'):
         'metrics':{'views':views,'engaged_views':views*ratio/100,'shorts_source_views':views,'shorts_source_engaged_views':views*ratio/100,'shorts_source_engaged_view_rate_percentage':ratio,'average_view_duration':7,'average_view_percentage':116.7,'shares':10,'likes':50,'comments':5,'subscribers_gained':2}}
 
 class ZodiacAnalyticsTests(unittest.TestCase):
+    def test_transient_optional_report_failure_recovers_with_bounded_retries(self):
+        lane=adapter(self); attempts=[]
+        self.assertTrue(hasattr(lane.PROFILE,'optional_report_attempts'),'Zodiac transient retries must be configured')
+        def report(params,token):
+            if 'subscribedStatus' not in params.get('dimensions',''):return {}
+            attempts.append(dict(params))
+            if len(attempts)<3:
+                raise HTTPError('https://example.invalid',500,'Internal Server Error',{},
+                    io.BytesIO(b'{"error":{"errors":[{"reason":"internalError"}]}}'))
+            return {'columnHeaders':[{'name':'subscribedStatus'},{'name':'views'}],
+                'rows':[['UNSUBSCRIBED',400]]}
+        with patch('time.sleep') as sleep:
+            reports,warnings=analytics.collect_optional_analytics_reports('token',NOW,report,
+                attempts=lane.PROFILE.optional_report_attempts,error_details=True)
+        self.assertEqual([{'subscribedStatus':'UNSUBSCRIBED','views':400}],reports['subscriber_status']['rows'])
+        self.assertEqual([],warnings)
+        self.assertEqual(3,len(attempts));self.assertTrue(all(p==attempts[0] for p in attempts))
+        self.assertEqual([1,2],[call.args[0] for call in sleep.call_args_list])
+
+    def test_optional_report_retries_stop_and_permission_errors_are_not_retried(self):
+        self.assertIn('attempts',inspect.signature(analytics.collect_optional_analytics_reports).parameters)
+        for code,expected in ((500,3),(429,3),(403,1),(400,1)):
+            attempted=[]
+            def report(params,token):
+                if 'subscribedStatus' not in params.get('dimensions',''):return {}
+                attempted.append(params)
+                raise HTTPError('https://example.invalid',code,'unavailable',{},io.BytesIO(b'{}'))
+            with patch('time.sleep'):
+                reports,warnings=analytics.collect_optional_analytics_reports('token',NOW,report,attempts=3,error_details=True)
+            self.assertNotIn('subscriber_status',reports)
+            self.assertEqual(expected,len(attempted))
+            self.assertEqual([f'Optional YouTube Analytics report subscriber_status unavailable: HTTPError (HTTP {code})'],warnings)
+        attempted=[]
+        with patch('time.sleep') as sleep:
+            _,warnings=analytics.collect_optional_analytics_reports('token',NOW,report)
+        self.assertEqual(1,len(attempted));sleep.assert_not_called()
+        self.assertEqual(['Optional YouTube Analytics report subscriber_status unavailable: HTTPError'],warnings)
+
     def test_optional_report_failure_identifies_http_cause_without_response_secrets(self):
         # Losing the opt-in formatter must make this assertion fail; Drama keeps its old warning.
         lane=adapter(self)
@@ -62,6 +101,14 @@ class ZodiacAnalyticsTests(unittest.TestCase):
             raise HTTPError('https://example.invalid',503,'private-fixture-value',{},io.BytesIO(b'not JSON private-fixture-value'))
         _,warnings=analytics.collect_optional_analytics_reports('token',NOW,malformed,error_details=True)
         self.assertTrue(all(w.endswith('HTTPError (HTTP 503)') for w in warnings))
+        def nested(params,token):
+            if 'subscribedStatus' not in params.get('dimensions',''):return {}
+            body=b'{"error":'+b'['*30000+b'0'+b']'*30000+b'}'
+            raise HTTPError('https://example.invalid',500,'Internal Server Error',{},io.BytesIO(body))
+        reports,warnings=analytics.collect_optional_analytics_reports('token',NOW,nested,error_details=True)
+        self.assertIn('geography',reports)
+        self.assertNotIn('subscriber_status',reports)
+        self.assertEqual(['Optional YouTube Analytics report subscriber_status unavailable: HTTPError (HTTP 500)'],warnings)
 
     def test_snapshot_excludes_drama_future_unverified_and_abandoned(self):
         lane=adapter(self)

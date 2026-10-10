@@ -29,6 +29,8 @@ Test default Drama behavior, Zodiac ID/channel/repository separation, verified/f
 ## Observed current data and API references
 The inspected Drama projection at 2026-10-09T17:30:33Z analyzed 546 videos with 539/527/438 observed 24h/72h/7d checkpoints. Its warehouse had 20 active report-type jobs and retention checkpoints for 159 video IDs. These are observations of Drama, never seed data for Zodiac.
 
+Follow-up live audit on 2026-10-10: Drama's 23:30:28Z summary analyzed 548 videos and returned two subscriber-status rows. Zodiac's 03:59:17Z collection analyzed two young videos, registered 20 Reporting jobs, persisted its warehouse and rebuilt matching planner context; its stage remains cold_start with no mature 24h/72h/7d observations. Initial Reporting CSVs and retention curves are still pending, rather than missing implementation. The subscriber-status request uses the same supported dimensions and metrics in both lanes. Zodiac run 38022463854 identified Google HTTP 500, internalError; this does not establish an OAuth or query-schema defect. Add Zodiac-only bounded transient retries and safe diagnostic classifications while preserving Drama's defaults. Successful collection must not imply every optional dataset was returned.
+
 - [Analytics API authorization](https://developers.google.com/youtube/analytics/reference/)
 - [Analytics metric definitions](https://developers.google.com/youtube/analytics/metrics)
 - [Reporting job lifecycle](https://developers.google.com/youtube/reporting/v1/reports)
