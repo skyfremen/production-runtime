@@ -142,7 +142,8 @@ def planner_projection(summary):
 PROFILE=shared.AnalyticsProfile(lane='zodiac',content_id_re=CONTENT_ID,result_glob='za-*.json',
     credential_names=('ZODIAC_CLIENT_ID','ZODIAC_CLIENT_SECRET','ZODIAC_REFRESH_TOKEN'),
     warehouse_repository=WAREHOUSE,schema_name='wacky-astrology-youtube-analytics',creative_loader=creative_map,
-    result_filter=eligible_result,channel_guard=verify_channel,summary_adapter=enrich_summary,projection_builder=planner_projection)
+    result_filter=eligible_result,channel_guard=verify_channel,summary_adapter=enrich_summary,projection_builder=planner_projection,
+    optional_error_details=True)
 
 
 def run(planner_root,warehouse_root,collected_at=None):

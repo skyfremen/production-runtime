@@ -54,6 +54,7 @@ class AnalyticsProfile:
     channel_guard: object = None
     summary_adapter: object = None
     projection_builder: object = None
+    optional_error_details: bool = False
 
 
 DRAMA = AnalyticsProfile()
@@ -223,7 +224,34 @@ def optional_metric_int(value) -> int | None:
         return None
 
 
-def collect_optional_analytics_reports(token: str, now: datetime, report_fn=analytics_report) -> tuple[dict, list[str]]:
+def analytics_error_detail(exc: Exception) -> str:
+    """Expose bounded API classifications, never raw response text, URLs or credentials."""
+    if not isinstance(exc, HTTPError):
+        return type(exc).__name__
+    details = [f"HTTP {exc.code}"]
+    known_reasons = {"badRequest", "forbidden", "insufficientPermissions", "authError",
+                     "unauthorized", "notFound", "quotaExceeded", "rateLimitExceeded",
+                     "userRateLimitExceeded", "backendError", "internalError",
+                     "accessNotConfigured"}
+    known_messages = {"the query is not supported": "unsupported query",
+                      "no filter selected": "missing filter"}
+    try:
+        body = exc.read(65537)
+        if len(body) <= 65536:
+            error = json.loads(body).get("error", {})
+            for item in error.get("errors", []):
+                reason = item.get("reason")
+                if reason in known_reasons and reason not in details:
+                    details.append(reason)
+            message = str(error.get("message", "")).strip().rstrip(".").casefold()
+            if message in known_messages:
+                details.append(known_messages[message])
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    return f"{type(exc).__name__} ({'; '.join(details)})"
+
+
+def collect_optional_analytics_reports(token: str, now: datetime, report_fn=analytics_report, *, error_details=False) -> tuple[dict, list[str]]:
     start = (now - timedelta(days=WINDOW_DAYS)).date().isoformat()
     end = now.date().isoformat()
     reports = {}
@@ -247,7 +275,8 @@ def collect_optional_analytics_reports(token: str, now: datetime, report_fn=anal
                 "rows": report_rows(report),
             }
         except Exception as exc:
-            warnings.append(f"Optional YouTube Analytics report {name} unavailable: {type(exc).__name__}")
+            detail = analytics_error_detail(exc) if error_details else type(exc).__name__
+            warnings.append(f"Optional YouTube Analytics report {name} unavailable: {detail}")
     return reports, warnings
 
 
@@ -455,7 +484,10 @@ def snapshot(root: Path, token: str | None = None, now: datetime | None = None, 
     current = collect_data_api(rows, token)
     live_rows = [row for row in rows if row["youtube_video_id"] in current]
     detailed, detailed_ok, detailed_warnings = collect_analytics_api(live_rows, token, now)
-    analytics_reports, report_warnings = collect_optional_analytics_reports(token, now)
+    if profile.optional_error_details:
+        analytics_reports, report_warnings = collect_optional_analytics_reports(token, now, error_details=True)
+    else:
+        analytics_reports, report_warnings = collect_optional_analytics_reports(token, now)
     per_video_traffic, traffic_warnings = collect_per_video_traffic_sources(live_rows, token, now) if profile is DRAMA else collect_per_video_traffic_sources(live_rows, token, now, preserve_nulls=True)
     videos = []
     for row in live_rows:

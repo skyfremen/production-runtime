@@ -1,10 +1,12 @@
 import importlib.util
+import io
 import json
 from datetime import datetime, timezone
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
+from urllib.error import HTTPError
 import analytics
 import analytics_remote
 
@@ -29,6 +31,38 @@ def observation(age=72,views=1000,ratio=40,cid=CID,format='sign_results'):
         'metrics':{'views':views,'engaged_views':views*ratio/100,'shorts_source_views':views,'shorts_source_engaged_views':views*ratio/100,'shorts_source_engaged_view_rate_percentage':ratio,'average_view_duration':7,'average_view_percentage':116.7,'shares':10,'likes':50,'comments':5,'subscribers_gained':2}}
 
 class ZodiacAnalyticsTests(unittest.TestCase):
+    def test_optional_report_failure_identifies_http_cause_without_response_secrets(self):
+        # Losing the opt-in formatter must make this assertion fail; Drama keeps its old warning.
+        lane=adapter(self)
+        payload={'error':{'code':400,'message':'The query is not supported.',
+            'errors':[{'reason':'badRequest','message':'Bearer private-fixture-value'}]}}
+        def report(params, token):
+            if 'subscribedStatus' in params.get('dimensions',''):
+                raise HTTPError('https://example.invalid/?token=private-fixture-value',400,
+                    'private-fixture-value',{},io.BytesIO(json.dumps(payload).encode()))
+            return {}
+        reports,warnings=analytics.collect_optional_analytics_reports('token',NOW,report,
+            error_details=lane.PROFILE.optional_error_details)
+        self.assertIn('geography',reports)
+        self.assertNotIn('subscriber_status',reports)
+        self.assertEqual(['Optional YouTube Analytics report subscriber_status unavailable: HTTPError (HTTP 400; badRequest; unsupported query)'],warnings)
+        self.assertNotIn('private-fixture-value',json.dumps(warnings))
+        _,default_warnings=analytics.collect_optional_analytics_reports('token',NOW,report)
+        self.assertEqual(['Optional YouTube Analytics report subscriber_status unavailable: HTTPError'],default_warnings)
+
+    def test_optional_report_failure_handles_non_json_and_unknown_error_bodies(self):
+        def report(params,token):
+            if 'subscribedStatus' in params.get('dimensions',''):
+                raise HTTPError('https://example.invalid',403,'private-fixture-value',{},
+                    io.BytesIO(b'{"error":{"message":"private-fixture-value","errors":[{"reason":"private-fixture-value"}]}}'))
+            return {}
+        _,warnings=analytics.collect_optional_analytics_reports('token',NOW,report,error_details=True)
+        self.assertEqual(['Optional YouTube Analytics report subscriber_status unavailable: HTTPError (HTTP 403)'],warnings)
+        def malformed(params,token):
+            raise HTTPError('https://example.invalid',503,'private-fixture-value',{},io.BytesIO(b'not JSON private-fixture-value'))
+        _,warnings=analytics.collect_optional_analytics_reports('token',NOW,malformed,error_details=True)
+        self.assertTrue(all(w.endswith('HTTPError (HTTP 503)') for w in warnings))
+
     def test_snapshot_excludes_drama_future_unverified_and_abandoned(self):
         lane=adapter(self)
         with tempfile.TemporaryDirectory() as td:
