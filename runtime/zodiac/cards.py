@@ -27,6 +27,12 @@ CYAN = (119, 236, 224)
 GOLD = (255, 222, 90)
 GREEN = (142, 242, 149)
 
+SIGN_SYMBOLS = {
+    "aries": "♈", "taurus": "♉", "gemini": "♊", "cancer": "♋",
+    "leo": "♌", "virgo": "♍", "libra": "♎", "scorpio": "♏",
+    "sagittarius": "♐", "capricorn": "♑", "aquarius": "♒", "pisces": "♓",
+}
+
 ELEMENTS = (
     ("FIRE", ("aries", "leo", "sagittarius")),
     ("EARTH", ("taurus", "virgo", "capricorn")),
@@ -66,6 +72,10 @@ def title_lines(draw, text):
             return result,size
     raise MediaRejected("TITLE_NOT_READABLE")
 
+def display_sign(name):
+    name = name.strip()
+    return f"{SIGN_SYMBOLS[name.casefold()]} {name}"
+
 def ordered_rows(item):
     rows=item["rows"]
     if item["format"]=="grouped_elements":
@@ -75,14 +85,19 @@ def ordered_rows(item):
             out.append(("group",group,""))
             for sign in signs:
                 r=lookup[sign]
-                out.append(("row",r["label"].upper(),r["answer"]))
+                out.append(("row",display_sign(r["label"].upper()),r["answer"]))
         return out
     out=[]
     for i,r in enumerate(rows):
         label=r["label"].upper()
+        answer=r["answer"]
+        if item["format"]=="trait_matches":
+            answer=", ".join(display_sign(sign) for sign in answer.split(","))
+        else:
+            label=display_sign(label)
         if item["format"]=="ranking":
             label=f"{i+1:02d}. {label}"
-        out.append(("row",label,r["answer"]))
+        out.append(("row",label,answer))
     return out
 
 def choose_row_font(draw, entries, row_height):
