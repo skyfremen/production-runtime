@@ -96,7 +96,7 @@ def ordered_rows(item):
         else:
             label=display_sign(label)
         if item["format"]=="ranking":
-            label=f"{i+1:02d}. {label}"
+            label=f"#{i+1} {label}"
         out.append(("row",label,answer))
     return out
 
