@@ -114,12 +114,12 @@ class ZodiacAnalyticsTests(unittest.TestCase):
         lane=adapter(self)
         with tempfile.TemporaryDirectory() as td:
             root=Path(td);result=fixture(root)
-            for cid,changes in [('wd-'+'b'*24,{}),('za-future-fixture-001',{'publish_at':'2026-10-11T00:00:00Z'}),('za-unverified-fixture-001',{'verified':False}),('za-abandoned-fixture-001',{})]:
+            for cid,changes in [('wd-'+'b'*24,{}),('za-future-fixture-001',{'publish_at':'2026-10-11T00:00:00Z','youtube_video_id':'xxxxxxxxxxx'}),('za-unverified-fixture-001',{'verified':False}),('za-abandoned-fixture-001',{})]:
                 (root/f'content/results/{cid}.json').write_text(json.dumps({**result,'content_id':cid,**changes}))
                 request_path=root/'content/requests/rq-fixture.json';request=json.loads(request_path.read_text())
                 request['items'].append({**request['items'][0],'content_id':cid});request_path.write_text(json.dumps(request))
             path=root/'content/abandonments/za-abandoned-fixture-001.json';path.parent.mkdir(parents=True);path.write_text('{}')
-            with patch('analytics.collect_data_api',return_value={VIDEO:{'views':100,'duration_seconds':6}}),patch('analytics.collect_analytics_api',return_value=({},False,['no scope'])),patch('analytics.collect_optional_analytics_reports',return_value=({},[])),patch('analytics.collect_per_video_traffic_sources',return_value=({},[])):
+            with patch('analytics.collect_data_api',return_value={VIDEO:{'views':100,'duration_seconds':6,'privacy_status':'public','youtube_published_at':'2026-10-07T00:00:00Z'},'xxxxxxxxxxx':{'privacy_status':'private','youtube_published_at':'2026-10-09T00:00:00Z'}}),patch('analytics.collect_analytics_api',return_value=({},False,['no scope'])),patch('analytics.collect_optional_analytics_reports',return_value=({},[])),patch('analytics.collect_per_video_traffic_sources',return_value=({},[])):
                 snap=analytics.snapshot(root,'token',NOW,profile=lane.PROFILE)
             self.assertEqual([CID],[v['content_id'] for v in snap['videos']])
             self.assertEqual('sign_results',snap['videos'][0]['creative']['format'])
@@ -156,7 +156,7 @@ class ZodiacAnalyticsTests(unittest.TestCase):
             root=Path(td);planner=root/'planner';warehouse=root/'warehouse';fixture(planner)
             def data(path,params,token):
                 if path=='channels':return {'items':[{'id':CHANNEL,'snippet':{'customUrl':'@WackyAstrology'}}]}
-                return {'items':[{'id':VIDEO,'statistics':{'viewCount':'100'},'contentDetails':{'duration':'PT6S'}}]}
+                return {'items':[{'id':VIDEO,'statistics':{'viewCount':'100'},'contentDetails':{'duration':'PT6S'},'status':{'privacyStatus':'public'},'snippet':{'publishedAt':'2026-10-07T00:00:00Z'}}]}
             def context(path):
                 target=path/'content/context.json';target.write_text(json.dumps({'analytics_summary':json.loads((path/'content/planner-analytics.json').read_text())}));return target
             with patch('analytics.access_token',return_value='token'),patch('analytics.youtube_data',side_effect=data),patch('analytics.collect_optional_analytics_reports',return_value=({},[])),patch('analytics.collect_per_video_traffic_sources',return_value=({},[])),patch('analytics.analytics_report_all',return_value={}),patch('analytics.analytics_report',return_value={}),patch('analytics.reporting_json',side_effect=lambda method,path,token,body=None:reporting.json(method,path,body)),patch('analytics.reporting_bytes',side_effect=lambda url,token:reporting.bytes(url)),patch('analytics.rebuild_planner_context',side_effect=context):
@@ -239,3 +239,4 @@ class ZodiacAnalyticsTests(unittest.TestCase):
         self.assertFalse(analytics_remote.allowed_path('planner','PLANNING.md'))
 
 if __name__=='__main__':unittest.main()
+

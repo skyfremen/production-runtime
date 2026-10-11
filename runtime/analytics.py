@@ -57,6 +57,7 @@ class AnalyticsProfile:
     projection_builder: object = None
     optional_error_details: bool = False
     optional_report_attempts: int = 1
+    reconcile_publication_time: bool = False
 
 
 DRAMA = AnalyticsProfile()
@@ -394,7 +395,7 @@ def eligible_videos(root: Path, creative: dict[str, dict], now: datetime, *, pro
             continue
         if not profile.content_id_re.fullmatch(cid) or not VIDEO_RE.fullmatch(vid):
             continue
-        if published > now or published < cutoff:
+        if not profile.reconcile_publication_time and (published > now or published < cutoff):
             continue
         if profile.result_filter and not profile.result_filter(root, result, creative):
             continue
@@ -434,6 +435,26 @@ def collect_data_api(rows: list[dict], token: str) -> dict[str, dict]:
                 "privacy_status": status.get("privacyStatus"),
             }
     return out
+
+
+def public_performance_rows(rows: list[dict], current: dict, now: datetime) -> list[dict]:
+    """Resolve actual public times without modifying immutable production receipts."""
+    live = []
+    cutoff = now - timedelta(days=WINDOW_DAYS)
+    for row in rows:
+        remote = current.get(row['youtube_video_id'], {})
+        if remote.get('privacy_status') != 'public':
+            continue
+        try:
+            published = parse_dt(remote.get('youtube_published_at'))
+        except (TypeError, ValueError):
+            continue
+        if not cutoff <= published <= now:
+            continue
+        live.append({**row, 'scheduled_publish_at': row['publish_at'],
+            'publish_at': iso_z(published), 'publication_time_source': 'youtube_publication',
+            'age_hours': round((now - published).total_seconds() / 3600, 2)})
+    return live
 
 
 def collect_analytics_api(rows: list[dict], token: str, now: datetime) -> tuple[dict[str, dict], bool, list[str]]:
@@ -493,6 +514,8 @@ def snapshot(root: Path, token: str | None = None, now: datetime | None = None, 
     rows = eligible_videos(root, creative, now, profile=profile)
     token = token or access_token(profile)
     current = collect_data_api(rows, token)
+    if profile.reconcile_publication_time:
+        rows = public_performance_rows(rows, current, now)
     live_rows = [row for row in rows if row["youtube_video_id"] in current]
     detailed, detailed_ok, detailed_warnings = collect_analytics_api(live_rows, token, now)
     if profile.optional_error_details or profile.optional_report_attempts > 1:
@@ -545,6 +568,11 @@ def all_snapshots(root: Path, current: dict, *, cid_re=CID_RE) -> list[dict]:
         for item in current.get("videos", [])
         if isinstance(item, dict) and cid_re.fullmatch(str(item.get("content_id", "")))
     }
+    actual_publications = {
+        str(item['content_id']): item for item in current.get('videos', [])
+        if isinstance(item, dict) and item.get('publication_time_source') == 'youtube_publication'
+        and str(item.get('content_id', '')) in live_cids
+    }
     docs = []
     paths = list((root / "realtime").glob("*/*.json")) + list((root / "realtime" / "legacy").glob("analytics-*.json"))
     for path in sorted(set(paths)):
@@ -556,6 +584,25 @@ def all_snapshots(root: Path, current: dict, *, cid_re=CID_RE) -> list[dict]:
                     item for item in d["videos"]
                     if isinstance(item, dict) and str(item.get("content_id", "")) in live_cids
                 ]
+                if actual_publications:
+                    corrected = []
+                    for item in d['videos']:
+                        actual = actual_publications.get(str(item.get('content_id')))
+                        if actual is None:
+                            corrected.append(item)
+                            continue
+                        if item.get('youtube_video_id') != actual.get('youtube_video_id'):
+                            continue
+                        try:
+                            age = (parse_dt(d['collected_at']) - parse_dt(actual['publish_at'])).total_seconds() / 3600
+                        except (KeyError, TypeError, ValueError):
+                            continue
+                        if age < 0:
+                            continue
+                        corrected.append({**item, 'publish_at': actual['publish_at'],
+                            'scheduled_publish_at': actual['scheduled_publish_at'],
+                            'publication_time_source': 'youtube_publication', 'age_hours': round(age, 2)})
+                    d['videos'] = corrected
                 docs.append(d)
         except Exception:
             pass
@@ -1224,3 +1271,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
