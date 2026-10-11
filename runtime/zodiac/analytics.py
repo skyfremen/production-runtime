@@ -7,7 +7,7 @@ from pathlib import Path
 import analytics as shared
 from analytics_remote import GitHubRepository, run_remote
 from .contract import CHANNEL, REPOSITORY
-from .content import FORMATS
+from .content import FORMATS, CATEGORIES, valid_content_labels
 
 CONTENT_ID=re.compile(r'^za-[a-z0-9-]{8,64}$')
 WAREHOUSE='skyfremen/zodiac-analytics-data'
@@ -28,8 +28,9 @@ def creative_map(root):
         for item in request['items']:
             cid=str(item.get('content_id','')); winner=item.get('zodiac') or {}
             if not CONTENT_ID.fullmatch(cid) or winner.get('format') not in FORMATS:continue
+            if not valid_content_labels(winner):raise RuntimeError('Zodiac analytics content labels invalid')
             title=str(winner.get('title','')); words=len(title.split())
-            out[cid]={'title':title,'category':winner['format'],'format':winner['format'],
+            out[cid]={'title':title,'category':winner.get('category','unknown'),'topic_tags':winner.get('topic_tags',[]),'format':winner['format'],
                 'hook':title,'headline_length':'3_6_words' if words<=6 else '7_10_words' if words<=10 else '11_18_words',
                 'rows':winner.get('rows',[]),'editorial_scores':winner.get('editorial_scores',{})}
     return out
@@ -63,29 +64,43 @@ def enrich_summary(summary,rows,current,root):
     for row in rows:
         item=latest.get(row['content_id'],{}); creative=item.get('creative') or {}; metrics=item.get('metrics') or {}
         mature=float(item.get('age_hours',0))>=72
-        row['format']=creative.get('format') or row.get('category','unknown')
+        row['format']=creative.get('format') or (row.get('category') if row.get('category') in FORMATS else 'unknown')
+        labels=creative
+        category=labels.get('category')
+        row['category']=category if category in CATEGORIES else 'unknown'
+        row['topic_tags']=labels.get('topic_tags',[]) if valid_content_labels({k:labels[k] for k in ('topic_tags',) if k in labels}) else []
         row['headline_length']=creative.get('headline_length','unknown')
         row['answer_examples']=[{'label':str(r.get('label',''))[:48],'answer':str(r.get('answer',''))[:68]} for r in creative.get('rows',[])[:3] if isinstance(r,dict)]
         for key in ('engaged_views','average_view_duration','likes','comments','shares','subscribers_gained'):
             row[key]=metrics.get(key) if mature else None
         # This matched-source ratio counts starts/replays; it is not Studio stayed-to-watch.
         row['mature_shorts_ratio']=row.get('shorts_source_engaged_view_rate_percentage') if mature else None
-    def grouped(key):
-        groups=shared.group_summary(rows,key)
+    def grouped(key,source_rows=None):
+        source_rows=rows if source_rows is None else source_rows
+        groups=shared.group_summary(source_rows,key)
         for name,metrics in groups.items():
-            items=[r for r in rows if str(r.get(key) or 'unknown')==name]
+            items=[r for r in source_rows if str(r.get(key) or 'unknown')==name]
             metrics['mature_shorts_sample']=sum(numeric(r.get('mature_shorts_ratio')) for r in items)
             metrics['median_shorts_source_engaged_view_rate_percentage']=shared.med([r.get('mature_shorts_ratio') for r in items])
             for source,target in [('engaged_views','engaged_views'),('average_view_duration','average_view_duration'),('likes','likes'),('comments','comments')]:
                 metrics['median_'+target]=shared.med([r.get(source) for r in items])
             metrics['views_72h_thresholds']={str(n):sum(numeric(r.get('views_72h')) and r['views_72h']>=n for r in items) for n in (100,500,1000)}
         return groups
-    for key in ('category_performance','tone_performance','lead_gender_performance','hook_type_performance','trend_performance','trend_topic_performance','low_sample_categories'):
+    for key in ('tone_performance','lead_gender_performance','hook_type_performance','trend_performance','trend_topic_performance','low_sample_categories'):
         summary.pop(key,None)
     summary['viewer_response_baseline']={'shorts_source_engaged_view_rate_percentage':shared.med([r.get('mature_shorts_ratio') for r in rows]),'average_view_percentage':shared.med([r.get('retention') for r in rows])}
     summary['lane']='zodiac';summary['format_performance']=grouped('format');summary['headline_length_performance']=grouped('headline_length')
+    summary['category_performance']=grouped('category')
+    tagged=[{**r,'topic_tag':tag} for r in rows for tag in r['topic_tags']]
+    summary['topic_tag_performance']=grouped('topic_tag',tagged)
+    summary['category_tracking']={'classified_videos':sum(r['category']!='unknown' for r in rows),
+        'unclassified_videos':sum(r['category']=='unknown' for r in rows),
+        'tagged_videos':sum(bool(r['topic_tags']) for r in rows),
+        'source':'Planner-recorded labels from immutable requests; legacy videos are unknown.',
+        'topic_tag_note':'Tags overlap: a video can appear in multiple tag groups; do not sum group totals.'}
     summary['metric_notes']={'shorts_source_engaged_view_rate_percentage':'Matched Shorts traffic-source engagedViews/views ratio; not Studio stayed-to-watch. Starts and replays affect the denominator.',
         'average_view_percentage':'Values over 100% may reflect repeated viewing; do not equate them with full-video completion.',
+        'content_labels':'Category and topic tags are planner-recorded metadata, not audience-measured comprehension or emotions. Unknown legacy labels are excluded from category recommendations.',
         'checkpoints':'Nearest observed age, not guaranteed exact checkpoint; API reporting can lag.',
         'bulk_reports':'Raw Reporting CSVs are stored and indexed; compact decisions use targeted Analytics API metrics.'}
     for field in ('top_examples','weak_retention_examples'):
@@ -96,7 +111,7 @@ def enrich_summary(summary,rows,current,root):
 
 
 def example(row):
-    keys=('content_id','title','format','headline_length','duration_seconds','views_2h','views_6h','views_24h','views_72h','views_7d','retention','average_view_duration','mature_shorts_ratio','answer_examples','checkpoint_observations')
+    keys=('content_id','title','category','topic_tags','format','headline_length','duration_seconds','views_2h','views_6h','views_24h','views_72h','views_7d','retention','average_view_duration','mature_shorts_ratio','answer_examples','checkpoint_observations')
     return {key:row.get(key) for key in keys}
 
 
@@ -105,8 +120,10 @@ def planner_projection(summary):
     base['lane']='zodiac'
     minimum=base['learning']['minimum_pattern_sample'];patterns=[]
     baseline=summary.get('viewer_response_baseline',{})
-    for dimension,key in (('format','format_performance'),('headline_length','headline_length_performance')):
+    for dimension,key in (('format','format_performance'),('headline_length','headline_length_performance'),
+                          ('category','category_performance'),('topic_tag','topic_tag_performance')):
         for value,metrics in summary.get(key,{}).items():
+            if value in ('unknown','untracked'):continue
             checkpoint=next((c for c in ('7d','72h') if metrics.get('sample_'+c,0)>=minimum),None)
             response=metrics.get('median_shorts_source_engaged_view_rate_percentage')
             retention=metrics.get('median_average_view_percentage')
@@ -158,4 +175,5 @@ def remote_main():
 
 if __name__=='__main__':
     remote_main()
+
 

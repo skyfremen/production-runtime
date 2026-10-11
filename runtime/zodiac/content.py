@@ -19,6 +19,9 @@ ELEMENTS = {
     "water": ("cancer", "scorpio", "pisces"),
 }
 FORMATS = ("sign_results", "ranking", "grouped_elements", "trait_matches")
+CATEGORIES = ("romance", "friendship", "family", "workplace", "social_conflict",
+              "hidden_habits", "personality_comparison")
+OPTIONAL_WINNER_FIELDS = {"category", "topic_tags"}
 SCORES = {"hook": 30, "curiosity": 25, "emotion": 20, "answers": 15, "originality": 10}
 DRAFT_FIELDS = {"winner_count", "winners"}
 WINNER_FIELDS = {"id", "format", "title", "duration_seconds",
@@ -61,6 +64,14 @@ def previous_items(draft_path, root):
                 past.append(item)
     return past
 
+def valid_content_labels(value):
+    category = value.get("category")
+    tags = value.get("topic_tags", [])
+    return (("category" not in value or type(category) is str and category in CATEGORIES)
+            and type(tags) is list and len(tags) <= 5
+            and all(type(tag) is str and re.fullmatch(r"[a-z][a-z0-9_]{0,31}", tag) for tag in tags)
+            and len(tags) == len(set(tags)))
+
 def validate(draft, previous=()):
     require(type(draft) is dict and set(draft) == DRAFT_FIELDS, "DRAFT_SCHEMA")
     n = draft["winner_count"]
@@ -70,7 +81,9 @@ def validate(draft, previous=()):
     ids = set()
     for index, w in enumerate(winners):
         tag = f"WINNER_{index+1}"
-        require(type(w) is dict and set(w) == WINNER_FIELDS, tag + "_SCHEMA")
+        require(type(w) is dict and WINNER_FIELDS <= set(w) <= WINNER_FIELDS | OPTIONAL_WINNER_FIELDS,
+                tag + "_SCHEMA")
+        require(valid_content_labels(w), tag + "_CONTENT_LABELS")
         cid = w["id"]
         require(plain(cid) and re.fullmatch(r"za-[a-z0-9-]{8,64}", cid)
                 and cid not in ids, tag + "_ID")
@@ -152,3 +165,4 @@ def main(argv=None):
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
