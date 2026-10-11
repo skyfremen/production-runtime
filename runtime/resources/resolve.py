@@ -59,6 +59,14 @@ def _media_sources(asset):
     fallback = media.pexels_fallback_url(asset)
     if fallback and fallback != primary:
         sources.append(("pexels_original_fallback", fallback, True))
+    replacements = load_json(Path(__file__).with_name("approved-replacements.json"))
+    replacement = replacements.get(str(asset.get("id") or ""))
+    if replacement:
+        sources.append((
+            "approved_replacement:" + replacement["replacement_asset_id"],
+            replacement["download_url"],
+            False,
+        ))
     return sources
 
 
@@ -109,8 +117,9 @@ def _resolve_one(asset, target, segment, *, do_download, do_preflight):
             "rendition": recorded,
             "media_source": source_name,
             "source_url_used": source_url,
-            "generic_source_fallback_used": fallback_used,
+            "generic_source_fallback_used": source_name != "registry_download_url",
             "pexels_original_fallback_used": fallback_used,
+            "replacement_asset_id": source_name.split(":", 1)[1] if source_name.startswith("approved_replacement:") else None,
             "preflight": detail,
             "preflight_duration_seconds": preflight_seconds,
             "download_metrics": metrics,
@@ -333,6 +342,7 @@ def resolve(request_path, registry_path=None, do_download=True, do_preflight=Tru
                     "pexels_original_fallback_used": info[
                         "pexels_original_fallback_used"
                     ],
+                    "replacement_asset_id": info["replacement_asset_id"],
                     "rendition": info["rendition"],
                     "normalized_sha256": info["download_metrics"].get(
                         "render_background_sha256"
@@ -342,9 +352,10 @@ def resolve(request_path, registry_path=None, do_download=True, do_preflight=Tru
                     ),
                 }
             )
-        fallback_used = any(
+        pexels_fallback_used = any(
             item["pexels_original_fallback_used"] for item in resolved
         )
+        fallback_used = any(item["generic_source_fallback_used"] for item in resolved)
         result = {
             "background_selection": "selected",
             "background_sequence": sequence,
@@ -353,7 +364,7 @@ def resolve(request_path, registry_path=None, do_download=True, do_preflight=Tru
             "background_treatment_pending": bool(do_download),
             "logical_asset_ids": [item["background_id"] for item in sequence],
             "rendition_fallback_used": fallback_used,
-            "pexels_original_fallback_used": fallback_used,
+            "pexels_original_fallback_used": pexels_fallback_used,
             "metrics": {
                 "resolution_started_at": started_at.isoformat(),
                 "background_resolution_duration_seconds": round(

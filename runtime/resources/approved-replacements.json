@@ -1,0 +1,8 @@
+{
+  "px-37904635": {
+    "replacement_asset_id": "px-11496606",
+    "download_url": "https://videos.pexels.com/video-files/11496606/11496606-uhd_3840_2160_30fps.mp4",
+    "source_url": "https://www.pexels.com/video/driving-car-on-mountain-road-11496606/",
+    "reason": "Original Pexels media returns 403 and its download fallback returns 404; replacement is an already approved nature_motion clip in the Drama inventory."
+  }
+}
