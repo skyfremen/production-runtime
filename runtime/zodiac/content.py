@@ -72,6 +72,29 @@ def valid_content_labels(value):
             and all(type(tag) is str and re.fullmatch(r"[a-z][a-z0-9_]{0,31}", tag) for tag in tags)
             and len(tags) == len(set(tags)))
 
+def load_classifications(root):
+    path = Path(root) / 'data/content-classifications.json'
+    if not path.exists():
+        return {}
+    data = read_json(path)
+    require(type(data) is dict and set(data) == {'version', 'classifications'}
+            and type(data['version']) is int and data['version'] == 1
+            and type(data['classifications']) is dict, 'CLASSIFICATIONS_SCHEMA')
+    for cid, labels in data['classifications'].items():
+        require(type(cid) is str and re.fullmatch(r'za-[a-z0-9-]{8,64}', cid)
+                and type(labels) is dict and set(labels) == {'category', 'topic_tags'}
+                and valid_content_labels(labels), 'CLASSIFICATIONS_LABELS')
+    return data['classifications']
+
+def content_labels(winner, cid, classifications):
+    if winner.get('category') in CATEGORIES:
+        return {'category': winner['category'], 'topic_tags': list(winner.get('topic_tags', [])),
+                'classification_source': winner.get('classification_source', 'planner_recorded')}
+    if cid in classifications:
+        return {**classifications[cid], 'topic_tags': list(classifications[cid]['topic_tags']),
+                'classification_source': 'editorial_backfill'}
+    return {}
+
 def validate(draft, previous=()):
     require(type(draft) is dict and set(draft) == DRAFT_FIELDS, "DRAFT_SCHEMA")
     n = draft["winner_count"]

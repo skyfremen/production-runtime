@@ -7,7 +7,7 @@ from pathlib import Path
 import analytics as shared
 from analytics_remote import GitHubRepository, run_remote
 from .contract import CHANNEL, REPOSITORY
-from .content import FORMATS, CATEGORIES, valid_content_labels
+from .content import FORMATS, CATEGORIES, valid_content_labels, load_classifications, content_labels
 
 CONTENT_ID=re.compile(r'^za-[a-z0-9-]{8,64}$')
 WAREHOUSE='skyfremen/zodiac-analytics-data'
@@ -23,7 +23,7 @@ def read_requests(root):
 
 
 def creative_map(root):
-    out={}
+    out={}; classifications=load_classifications(root)
     for request in read_requests(root):
         for item in request['items']:
             cid=str(item.get('content_id','')); winner=item.get('zodiac') or {}
@@ -32,7 +32,8 @@ def creative_map(root):
             title=str(winner.get('title','')); words=len(title.split())
             out[cid]={'title':title,'category':winner.get('category','unknown'),'topic_tags':winner.get('topic_tags',[]),'format':winner['format'],
                 'hook':title,'headline_length':'3_6_words' if words<=6 else '7_10_words' if words<=10 else '11_18_words',
-                'rows':winner.get('rows',[]),'editorial_scores':winner.get('editorial_scores',{})}
+                'rows':winner.get('rows',[]),'editorial_scores':winner.get('editorial_scores',{}),
+                **content_labels(winner,cid,classifications)}
     return out
 
 
@@ -68,6 +69,8 @@ def enrich_summary(summary,rows,current,root):
         labels=creative
         category=labels.get('category')
         row['category']=category if category in CATEGORIES else 'unknown'
+        row['classification_source']=labels.get('classification_source',
+            'planner_recorded' if row['category']!='unknown' else 'unknown')
         row['topic_tags']=labels.get('topic_tags',[]) if valid_content_labels({k:labels[k] for k in ('topic_tags',) if k in labels}) else []
         row['headline_length']=creative.get('headline_length','unknown')
         row['answer_examples']=[{'label':str(r.get('label',''))[:48],'answer':str(r.get('answer',''))[:68]} for r in creative.get('rows',[])[:3] if isinstance(r,dict)]
@@ -81,6 +84,8 @@ def enrich_summary(summary,rows,current,root):
         for name,metrics in groups.items():
             items=[r for r in source_rows if str(r.get(key) or 'unknown')==name]
             metrics['mature_shorts_sample']=sum(numeric(r.get('mature_shorts_ratio')) for r in items)
+            metrics['backfilled_sample']=sum(r.get('classification_source')=='editorial_backfill' for r in items)
+            metrics['planner_recorded_sample']=sum(r.get('classification_source')=='planner_recorded' for r in items)
             metrics['median_shorts_source_engaged_view_rate_percentage']=shared.med([r.get('mature_shorts_ratio') for r in items])
             for source,target in [('engaged_views','engaged_views'),('average_view_duration','average_view_duration'),('likes','likes'),('comments','comments')]:
                 metrics['median_'+target]=shared.med([r.get(source) for r in items])
@@ -95,12 +100,14 @@ def enrich_summary(summary,rows,current,root):
     summary['topic_tag_performance']=grouped('topic_tag',tagged)
     summary['category_tracking']={'classified_videos':sum(r['category']!='unknown' for r in rows),
         'unclassified_videos':sum(r['category']=='unknown' for r in rows),
+        'backfilled_videos':sum(r['classification_source']=='editorial_backfill' for r in rows),
+        'planner_recorded_videos':sum(r['classification_source']=='planner_recorded' for r in rows),
         'tagged_videos':sum(bool(r['topic_tags']) for r in rows),
-        'source':'Planner-recorded labels from immutable requests; legacy videos are unknown.',
+        'source':'Planner-recorded labels take priority; authorized legacy labels come from data/content-classifications.json and are marked editorial_backfill. Other legacy videos stay unknown.',
         'topic_tag_note':'Tags overlap: a video can appear in multiple tag groups; do not sum group totals.'}
     summary['metric_notes']={'shorts_source_engaged_view_rate_percentage':'Matched Shorts traffic-source engagedViews/views ratio; not Studio stayed-to-watch. Starts and replays affect the denominator.',
         'average_view_percentage':'Values over 100% may reflect repeated viewing; do not equate them with full-video completion.',
-        'content_labels':'Category and topic tags are planner-recorded metadata, not audience-measured comprehension or emotions. Unknown legacy labels are excluded from category recommendations.',
+        'content_labels':'Category and topic tags are editorial metadata, either planner-recorded or explicitly authorized retrospective backfills, not audience-measured comprehension or emotions. Classification source is retained; unknown legacy labels are excluded from category recommendations.',
         'checkpoints':'Nearest observed age, not guaranteed exact checkpoint; API reporting can lag.',
         'bulk_reports':'Raw Reporting CSVs are stored and indexed; compact decisions use targeted Analytics API metrics.'}
     for field in ('top_examples','weak_retention_examples'):
@@ -111,7 +118,7 @@ def enrich_summary(summary,rows,current,root):
 
 
 def example(row):
-    keys=('content_id','title','category','topic_tags','format','headline_length','duration_seconds','views_2h','views_6h','views_24h','views_72h','views_7d','retention','average_view_duration','mature_shorts_ratio','answer_examples','checkpoint_observations')
+    keys=('content_id','title','category','topic_tags','classification_source','format','headline_length','duration_seconds','views_2h','views_6h','views_24h','views_72h','views_7d','retention','average_view_duration','mature_shorts_ratio','answer_examples','checkpoint_observations')
     return {key:row.get(key) for key in keys}
 
 
@@ -132,6 +139,8 @@ def planner_projection(summary):
             if metrics.get('mature_sample',0)<minimum:retention=None
             if not numeric(response) and not numeric(retention):continue
             patterns.append({'dimension':dimension,'value':value,'sample_size':metrics['sample_size'],
+                'backfilled_sample':metrics.get('backfilled_sample',0),
+                'planner_recorded_sample':metrics.get('planner_recorded_sample',0),
                 'mature_sample':metrics.get('mature_sample',0),'mature_shorts_sample':metrics.get('mature_shorts_sample',0),
                 'evidence_checkpoint':checkpoint,'checkpoint_sample':metrics['sample_'+checkpoint],
                 'evidence_median_views':metrics.get('median_views_'+checkpoint),

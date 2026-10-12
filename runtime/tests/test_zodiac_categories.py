@@ -8,6 +8,23 @@ from test_zodiac_analytics import fixture, observation, CID
 
 
 class CategoryAnalyticsTests(unittest.TestCase):
+    def test_backfill_snapshot_labels_are_explicit_and_original_requests_stay_unchanged(self):
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td); fixture(root)
+            request=root/'content/requests/rq-fixture.json'; before=request.read_bytes()
+            (root/'data').mkdir()
+            (root/'data/content-classifications.json').write_text(json.dumps(
+                {'version':1,'classifications':{CID:{'category':'romance','topic_tags':['rejection']}}}))
+            creative=lane.creative_map(root)[CID]
+            self.assertEqual('romance',creative['category'])
+            self.assertEqual('editorial_backfill',creative['classification_source'])
+            self.assertEqual(before,request.read_bytes())
+            video=observation(); video['creative']=creative
+            summary=analytics.build_summary(root,{'collected_at':'2026-10-10T00:00:00Z',
+                'videos':[video]},profile=lane.PROFILE)
+            self.assertEqual(1,summary['category_tracking']['backfilled_videos'])
+            self.assertEqual(0,summary['category_tracking']['planner_recorded_videos'])
+
     def test_immutable_request_labels_reach_creative_metadata(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td); fixture(root)
