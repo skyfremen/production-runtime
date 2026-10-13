@@ -10,6 +10,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw, ImageFile, ImageFont, ImageOps, ImageStat
 
+from transform.emoji import render_emoji
 from transform.synth import (
     ONNX_BACKEND,
     PYTORCH_FALLBACK_BACKEND,
@@ -30,10 +31,6 @@ ASSETS = BASE / "assets"
 UI_ASSETS = ASSETS / "ui"
 FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 FONT_REG = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-EMOJI_FONT_CANDIDATES = [
-    "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
-    "/usr/share/fonts/truetype/noto/NotoEmoji-Regular.ttf",
-]
 CARD_TRANSITION_SECONDS = 0.30
 
 VIDEO_WIDTH = 1080
@@ -330,30 +327,6 @@ def draw_text_centered_y(draw, x, center_y, text, fnt, fill):
     y = center_y - (bb[3] - bb[1]) / 2 - bb[1]
     draw.text((x, y), text, font=fnt, fill=fill)
     return bb[2] - bb[0]
-
-
-def render_emoji(icon, target_size):
-    for emoji_font in EMOJI_FONT_CANDIDATES:
-        if not Path(emoji_font).exists():
-            continue
-        try:
-            tile_size = 150
-            tile = Image.new("RGBA", (tile_size, tile_size), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(tile)
-            preferred_size = 109 if "ColorEmoji" in emoji_font else 96
-            fnt = ImageFont.truetype(emoji_font, preferred_size)
-            bb = draw.textbbox((0, 0), icon, font=fnt, embedded_color=True)
-            x = (tile_size - (bb[2] - bb[0])) / 2 - bb[0]
-            y = (tile_size - (bb[3] - bb[1])) / 2 - bb[1]
-            draw.text((x, y), icon, font=fnt, embedded_color=True)
-            bbox = tile.getbbox()
-            if bbox:
-                tile = tile.crop(bbox)
-                return ImageOps.contain(tile, (target_size, target_size), method=Image.Resampling.LANCZOS)
-        except (OSError, ValueError):
-            continue
-    raise RuntimeError(f"Unable to render requested card emoji: {icon}")
-
 
 
 def fit_like_cta_text(draw, label, text_limit):
