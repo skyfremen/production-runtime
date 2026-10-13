@@ -26,6 +26,8 @@ WHITE = (251, 250, 251)
 CYAN = (119, 236, 224)
 GOLD = (255, 222, 90)
 GREEN = (142, 242, 149)
+CTA_TEXT = "❤️ Like if you agree"
+HEART = (255, 70, 90)
 
 SIGN_SYMBOLS = {
     "aries": "♈", "taurus": "♉", "gemini": "♊", "cancer": "♋",
@@ -124,6 +126,14 @@ def render_card(item, path):
         w=text_width(d,line,font(title_size,True))
         d.text(((LEFT+RIGHT-w)//2,y),line,font=font(title_size,True),fill=GOLD)
         y+=int(title_size*1.35)
+    cta_size=round(title_size*.75)
+    cta_font=font(cta_size,True)
+    cta_x=(LEFT+RIGHT-text_width(d,CTA_TEXT,cta_font))//2
+    cta_y=y
+    d.text((cta_x,y),"❤️",font=cta_font,fill=HEART)
+    d.text((cta_x+d.textlength("❤️ ",font=cta_font),y),
+           "Like if you agree",font=cta_font,fill=WHITE)
+    y+=int(cta_size*1.35)
     y+=33
     d.line((LEFT,y,RIGHT,y),fill=(92,92,92),width=3)
     y+=32
@@ -146,6 +156,7 @@ def render_card(item, path):
     path.parent.mkdir(parents=True,exist_ok=True)
     im.save(path)
     return {"title_lines":len(lines),"title_font_px":title_size,
+            "cta_text":CTA_TEXT,"cta_font_px":cta_size,"cta_y":cta_y,
             "row_font_px":size,"rows":len(entries),
             "content_bottom_y":round(y),"safe_right_x":RIGHT,
             "background":"solid_black","all_text_visible_from_frame_zero":True}
