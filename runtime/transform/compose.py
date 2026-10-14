@@ -182,7 +182,30 @@ def choose_test_narration(synthesizer, script, voice, speed, max_seconds):
     return shorter, audio, segments
 
 
+def split_opening_hook(hook):
+    """Keep the first complete sentence on the card; caption the remaining hook."""
+    text = str(hook).strip()
+    abbreviations = {"mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st", "vs", "etc"}
+    for match in re.finditer(r"""[.!?](?:["'”’])?(?=\s|$)""", text):
+        if text[match.start()] == ".":
+            token = text[:match.start()].split()[-1].casefold() if text[:match.start()].split() else ""
+            if token in abbreviations or (len(token) == 1 and token.isalpha()):
+                continue
+        return text[:match.end()], text[match.end():].strip()
+    return text, ""
+
+
+def preflight_hook_card(hook):
+    first, _ = split_opening_hook(hook)
+    if not first:
+        raise ValueError("Opening hook must contain a non-empty first sentence")
+    draw = ImageDraw.Draw(Image.new("L", (1, 1)))
+    return fit_hook(draw, first, HOOK_MAX_WIDTH, HOOK_MAX_HEIGHT)
+
+
 def generate_narration(synthesizer, hook, story_text, voice, speed, test_mode, test_max):
+    hook, remainder = split_opening_hook(hook)
+    story_text = " ".join(part for part in (remainder, story_text.strip()) if part)
     started = time.monotonic()
     intro_audio, _intro_segments = synthesize(synthesizer, hook, voice, speed)
     intro_duration = len(intro_audio) / 24000.0
@@ -238,7 +261,7 @@ def fit_hook(draw, text, max_width, max_height):
         widths_fit = all(draw.textlength(line, font=fnt) <= max_width for line in lines)
         if fits and widths_fit and len(lines) * line_height <= max_height:
             return fnt, lines, line_height
-    raise ValueError("Complete opening hook cannot fit card bounds; refusing to truncate text")
+    raise ValueError("Opening hook first sentence cannot fit card bounds; refusing to truncate text")
 
 
 def caption_layout(text):
@@ -459,6 +482,8 @@ def main():
     parser.add_argument("--request", required=True)
     args = parser.parse_args()
     request = load_json(args.request)
+    # Reject an unreadable card before background loading or narration generation.
+    hook_layout = preflight_hook_card(request["story"]["hook"])
     selection_path = OUTPUT_DIR / "background_selection.json"
     background = OUTPUT_DIR / "background.asset"
     if not selection_path.exists() or not background.exists():
@@ -603,9 +628,7 @@ def main():
         ix += EMOJI_STEP_X
 
     hook_x, hook_y = HOOK_POS
-    hook_font, hook_lines, line_height = fit_hook(
-        dc, hook, HOOK_MAX_WIDTH, HOOK_MAX_HEIGHT
-    )
+    hook_font, hook_lines, line_height = hook_layout
     for i, line in enumerate(hook_lines):
         dc.text((hook_x, hook_y + i * line_height), line, font=hook_font, fill=(8, 8, 8, 255))
 
@@ -743,7 +766,7 @@ def main():
         "narration_speed": speed,
         "narration_seconds": round(speech_duration, 6),
         "narration_audio_metrics": speech_metrics,
-        "card_title_text": hook,
+        "card_title_text": split_opening_hook(hook)[0],
         "start_lead_seconds": START_LEAD_SECONDS,
         "card_title_seconds": round(intro_duration, 6),
         "card_transition_seconds": CARD_TRANSITION_SECONDS,
@@ -792,3 +815,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
