@@ -80,6 +80,29 @@ class PublishingTests(unittest.TestCase):
         self.assertEqual(VIDEO,self.upload()['youtube_video_id'])
         self.assertEqual(1,self.youtube.inserts)
 
+    def test_episode_specific_metadata_and_ten_tags_survive_upload(self):
+        description='How would each zodiac sign respond when their friend crops them out of a photo? Compare the reactions.'
+        hashtags=['#WackyAstrology','#Zodiac','#Shorts','#ZodiacSigns','#ZodiacHumor',
+                  '#FriendshipDrama','#GroupPhoto','#FunnyZodiac','#AstrologyHumor','#Friendship']
+        planned=['zodiac signs','astrology humor','group photo','friendship drama',
+                 'cropped out','zodiac reactions','funny zodiac','friend reactions',
+                 'zodiac friendship','astrology comedy']
+        self.item['youtube']={'title':self.item['zodiac']['title'],'description':description,
+                              'hashtags':hashtags,'tags':planned,'made_for_kids':False}
+        evidence=self.upload()
+        snippet=self.youtube.body['snippet']
+        self.assertEqual(description+'\\n\\n'+' '.join(hashtags),snippet['description'])
+        self.assertEqual(len(hashtags),10)
+        self.assertTrue(set(planned) <= set(snippet['tags']))
+        self.assertGreaterEqual(len(snippet['tags']),11)
+        self.assertEqual(1,sum(t.startswith('za-id-') for t in snippet['tags']))
+        self.assertEqual(snippet,evidence['upload_body']['snippet'])
+
+    def test_legacy_requests_retain_original_base_tags(self):
+        body=self.publisher.upload_body(self.item)
+        self.assertEqual([self.publisher.marker(self.item['content_id']),
+                          'Wacky Astrology','Zodiac','Shorts'],body['snippet']['tags'])
+
     def test_uncertain_insert_recovers_marker_without_another_upload(self):
         self.youtube.fail_insert=True
         with self.assertRaises(TimeoutError): self.upload()
