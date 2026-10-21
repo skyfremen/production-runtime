@@ -11,7 +11,7 @@ on:
         description: "Public YouTube watch or Shorts URL"
         required: true
         type: string
-        default: "https://www.youtube.com/watch?v=M7lc1UVf-VE"
+        default: "https://www.youtube.com/watch?v=aqz-KE-bpKQ"
 
 permissions:
   contents: read
@@ -21,7 +21,7 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 8
     env:
-      YOUTUBE_URL: ${{ inputs.youtube_url }}
+      YOUTUBE_URL: ${{ inputs.youtube_url || 'https://www.youtube.com/watch?v=aqz-KE-bpKQ' }}
     steps:
       - name: Load isolated experiment source
         shell: bash
