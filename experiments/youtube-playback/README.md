@@ -1,19 +1,14 @@
 # YouTube playback smoke test (isolated experiment)
 
-This is a standalone diagnostic experiment. It does **not** modify or run the Drama/Zodiac production workflows and has no access to production secrets.
+This standalone experiment does not use or change the production pipelines or secrets. The workflow itself must remain in `.github/workflows/` for GitHub to discover it; everything else is in `experiments/youtube-playback/`.
 
-## Run
+## Run manually
+Go to **Actions** → **YouTube Playback Smoke Test** → **Run workflow**, input a public video/Shorts URL (or accept default sample). Results and JSON diagnostics are printed in workflow logs; screenshots are saved only on the temporary runner.
 
-1. Open GitHub **Actions** > **YouTube Playback Smoke Test** > **Run workflow**.
-2. Enter a public YouTube watch URL or Shorts URL (or leave the default public sample).
-3. Open the job summary and the **Print diagnostics** step to read the status and JSON report.
+## Tests
+1. Official YouTube iframe JavaScript Player API with a localhost HTTP Referer: count as PASS only when reported play state is PLAYING and `getCurrentTime()` advances to at least 2 seconds. Logs API error codes.
+2. If the official embedded player fails, use yt-dlp to download only the first ~5 seconds and FFmpeg to actually decode at least 15 video frames. Metadata alone is not a pass.
 
-The workflow also runs on pushes that change this experiment or its own workflow file. Ordinary production commits do not trigger this experiment. To keep this experiment compatible with the repository's shell-only workflows, the screenshot and JSON are retained only on the temporary runner; the JSON is printed in the job logs and the summary is shown in GitHub Actions.
+Neither test bypasses authentication, solves CAPTCHAs or guarantees playback for all viewers. GitHub runner IP restrictions may prevent both methods. Treat such failures as **inconclusive about the actual video**. This experiment is for occasional video QA, not repeated view generation.
 
-## What counts as success
-
-Chromium loads the YouTube player and the **main video's `currentTime` advances by at least two seconds** while not paused or reporting an HTML media error. Page load alone is not enough. This does not check audio, video quality, full-length playback, or the experience on a real user's browser.
-
-YouTube may rate-limit or block automated GitHub-hosted browsers, or require sign-in, age verification, or CAPTCHA. The script records an `ENVIRONMENT_BLOCKED` classification for recognizable cases. Such a result does **not** prove the video is broken. A video that refuses to advance is reported as `PLAYBACK_FAILED`; check the screenshot and report before concluding the video is unavailable.
-
-Use this for occasional quality checks, not automated repeated view generation. The video does not need to be owned by this repository.
+Original standalone watch-page test remains in `check-playback.mjs` for diagnostics.
