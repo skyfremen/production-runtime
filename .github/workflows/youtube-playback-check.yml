@@ -1,11 +1,6 @@
 name: YouTube Playback Smoke Test
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/youtube-playback-check.yml"
-      - "experiments/youtube-playback/**"
   workflow_dispatch:
     inputs:
       youtube_url:

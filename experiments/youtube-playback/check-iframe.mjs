@@ -19,7 +19,8 @@ function videoId(raw) {
   return id;
 }
 
-const rawUrl = process.env.YOUTUBE_URL || 'https://www.youtube.com/watch?v=M7lc1UVf-VE';
+const rawUrl = process.env.YOUTUBE_URL || 'https://www.youtube.com/watch?v=aqz-KE-bpKQ';
+const embedHost = process.env.YOUTUBE_EMBED_HOST || 'https://www.youtube.com';
 const result = { method: 'official-iframe-player-api', url:rawUrl, status:'FAIL', id:null, reason:null, telemetry:null };
 let server, browser, page;
 
@@ -44,6 +45,7 @@ try {
     window.testState.phase='player-created';
     player = new YT.Player('player', {
       width: '854', height: '480', videoId: ${JSON.stringify(id)},
+      host: ${JSON.stringify(embedHost)},
       playerVars: { autoplay: 1, mute: 1, playsinline: 1, origin: location.origin },
       events: {
         onReady: function(e) {
@@ -70,7 +72,7 @@ try {
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const port=server.address().port;
-  browser = await chromium.launch({ headless:true, args:['--autoplay-policy=no-user-gesture-required'] });
+  browser = await chromium.launch({ headless: process.env.HEADFUL !== '1', args:['--autoplay-policy=no-user-gesture-required'] });
   page=await browser.newPage({viewport:{width:1000,height:740}, locale:'en-US'});
   await page.goto('http://127.0.0.1:'+port+'/', {waitUntil:'domcontentloaded', timeout:20000});
   await page.waitForFunction(() => window.testState?.playing || window.testState?.error, null, {timeout:55000});

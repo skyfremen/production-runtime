@@ -1,0 +1,49 @@
+name: YouTube Headed No-Cookie Playback Experiment
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/youtube-playback-headed.yml"
+  workflow_dispatch:
+    inputs:
+      youtube_url:
+        description: "Public YouTube video or Shorts URL"
+        required: true
+        type: string
+        default: "https://www.youtube.com/watch?v=aqz-KE-bpKQ"
+
+permissions:
+  contents: read
+
+jobs:
+  headed-playback:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      YOUTUBE_URL: ${{ inputs.youtube_url || 'https://www.youtube.com/watch?v=aqz-KE-bpKQ' }}
+      HEADFUL: "1"
+      YOUTUBE_EMBED_HOST: "https://www.youtube-nocookie.com"
+    steps:
+      - name: Load experiment source
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os, urllib.request
+          urllib.request.urlretrieve(
+            f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/tarball/{os.environ['GITHUB_SHA']}",
+            "/tmp/source.tgz")
+          PY
+          tar -xzf /tmp/source.tgz --strip-components 1 -C "${GITHUB_WORKSPACE}"
+
+      - name: Install full Chromium and virtual display
+        run: |
+          npm install --no-save playwright
+          npx playwright install --with-deps chromium
+
+      - name: Validate video playback in headed privacy-enhanced embed
+        run: xvfb-run -a node experiments/youtube-playback/check-iframe.mjs
+
+      - name: Print diagnostics
+        if: always()
+        run: cat experiments/youtube-playback/artifacts/iframe-report.json 2>/dev/null || true

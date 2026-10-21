@@ -1,10 +1,6 @@
 name: YouTube Playback Mac Runner Experiment
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/youtube-playback-macos.yml"
   workflow_dispatch:
     inputs:
       youtube_url:
