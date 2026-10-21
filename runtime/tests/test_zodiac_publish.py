@@ -91,7 +91,7 @@ class PublishingTests(unittest.TestCase):
                               'hashtags':hashtags,'tags':planned,'made_for_kids':False}
         evidence=self.upload()
         snippet=self.youtube.body['snippet']
-        self.assertEqual(description+'\\n\\n'+' '.join(hashtags),snippet['description'])
+        self.assertEqual(description+'\n\n'+' '.join(hashtags),snippet['description'])
         self.assertEqual(len(hashtags),10)
         self.assertTrue(set(planned) <= set(snippet['tags']))
         self.assertGreaterEqual(len(snippet['tags']),11)
