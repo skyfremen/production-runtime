@@ -99,8 +99,14 @@ def intake(root,eid,*,source_sha,runtime_sha):
         require(type(item) is dict and set(item)=={'request_version','content_id','source_draft_id','channel','zodiac','publication','render','youtube','visibility'},'REQUEST_ITEM_SCHEMA')
         require(item['request_version']==2 and item['source_draft_id']==did and item['channel']==CHANNEL and item['render']==RENDER and
             item['visibility']=='private' and item['content_id']==item['zodiac'].get('id'),'REQUEST_ITEM_IDENTITY')
-        require(type(item['youtube']) is dict and set(item['youtube'])=={'title','description','hashtags','made_for_kids'} and
-            item['youtube']['title']==item['zodiac']['title'] and item['youtube']['made_for_kids'] is False,'REQUEST_YOUTUBE')
+        metadata=item['zodiac'].get('youtube_metadata')
+        youtube=item['youtube']
+        expected_keys={'title','description','hashtags','made_for_kids'} | ({'tags'} if metadata is not None else set())
+        require(type(youtube) is dict and set(youtube)==expected_keys and
+            youtube['title']==item['zodiac']['title'] and youtube['made_for_kids'] is False,'REQUEST_YOUTUBE')
+        if metadata is not None:
+            require(all(youtube[k]==metadata[k] for k in ('description','hashtags','tags')),
+                    'REQUEST_YOUTUBE_METADATA')
         pub=item['publication']; require(type(pub) is dict and set(pub)=={'mode','publish_at'} and
             pub['mode']==('scheduled' if publication['enabled'] else 'artifact'),'REQUEST_PUBLICATION')
         at=pub['publish_at']; require(isinstance(at,str) and re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:00Z',at),'REQUEST_PUBLISH_AT')
