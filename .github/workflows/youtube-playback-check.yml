@@ -1,0 +1,51 @@
+name: YouTube Playback Smoke Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      youtube_url:
+        description: "Public YouTube video or Shorts URL to check"
+        required: true
+        type: string
+        default: "https://www.youtube.com/watch?v=jNQXAC9IVRw"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/youtube-playback-check.yml"
+      - "experiments/youtube-playback/**"
+
+permissions:
+  contents: read
+
+jobs:
+  playback-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      YOUTUBE_URL: ${{ inputs.youtube_url || 'https://www.youtube.com/watch?v=jNQXAC9IVRw' }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install browser dependencies
+        run: |
+          npm install --no-save playwright
+          npx playwright install --with-deps chromium
+
+      - name: Check YouTube playback
+        run: node experiments/youtube-playback/check-playback.mjs
+
+      - name: Upload playback diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: youtube-playback-diagnostics
+          path: experiments/youtube-playback/artifacts/
+          if-no-files-found: ignore
+          retention-days: 7
