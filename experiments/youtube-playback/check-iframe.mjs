@@ -19,7 +19,7 @@ function videoId(raw) {
   return id;
 }
 
-const rawUrl = process.env.YOUTUBE_URL || 'https://www.youtube.com/watch?v=jNQXAC9IVRw';
+const rawUrl = process.env.YOUTUBE_URL || 'https://www.youtube.com/watch?v=M7lc1UVf-VE';
 const result = { method: 'official-iframe-player-api', url:rawUrl, status:'FAIL', id:null, reason:null, telemetry:null };
 let server, browser, page;
 

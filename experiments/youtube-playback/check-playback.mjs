@@ -5,7 +5,7 @@ import { chromium } from 'playwright';
 const artifactsDir = path.resolve('experiments/youtube-playback/artifacts');
 fs.mkdirSync(artifactsDir, { recursive: true });
 
-const url = process.env.YOUTUBE_URL || 'https://www.youtube.com/watch?v=jNQXAC9IVRw';
+const url = process.env.YOUTUBE_URL || 'https://www.youtube.com/watch?v=M7lc1UVf-VE';
 const report = {
   status: 'FAIL',
   classification: 'NOT_STARTED',

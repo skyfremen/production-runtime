@@ -9,7 +9,7 @@ from urllib.parse import urlsplit, parse_qs
 
 DIR = Path('experiments/youtube-playback/artifacts')
 DIR.mkdir(parents=True, exist_ok=True)
-url = os.getenv('YOUTUBE_URL') or 'https://www.youtube.com/watch?v=jNQXAC9IVRw'
+url = os.getenv('YOUTUBE_URL') or 'https://www.youtube.com/watch?v=M7lc1UVf-VE'
 result = {'method':'yt-dlp-ffmpeg-decode','url':url,'status':'FAIL','reason':'','video_frames':0}
 
 def command(args, timeout=90):
