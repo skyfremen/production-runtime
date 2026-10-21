@@ -74,7 +74,14 @@ try {
 
   const startTime = await video.evaluate(async (element) => {
     element.muted = true;
-    await element.play();
+    // Cloud-browser media play() can remain pending indefinitely.
+    await Promise.race([
+      element.play(),
+      new Promise((_, reject) => setTimeout(
+        () => reject(new Error('video.play() did not start within 15 seconds')),
+        15000
+      )),
+    ]);
     return element.currentTime;
   });
 

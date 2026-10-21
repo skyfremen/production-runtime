@@ -6,9 +6,9 @@ This is a standalone diagnostic experiment. It does **not** modify or run the Dr
 
 1. Open GitHub **Actions** > **YouTube Playback Smoke Test** > **Run workflow**.
 2. Enter a public YouTube watch URL or Shorts URL (or leave the default public sample).
-3. Open the job result and download `youtube-playback-diagnostics` for `report.json` and `screenshot.png`.
+3. Open the job summary and the **Print diagnostics** step to read the status and JSON report.
 
-The workflow also runs **once on a push that changes the experiment or its own workflow file**. Ordinary production commits do not trigger this experiment.
+The workflow also runs on pushes that change this experiment or its own workflow file. Ordinary production commits do not trigger this experiment. To keep this experiment compatible with the repository's shell-only workflows, the screenshot and JSON are retained only on the temporary runner; the JSON is printed in the job logs and the summary is shown in GitHub Actions.
 
 ## What counts as success
 
