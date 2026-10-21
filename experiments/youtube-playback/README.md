@@ -19,3 +19,11 @@ A separate `youtube-playback-macos.yml` workflow tests the same official iframe 
 A `youtube-playback-headed.yml` workflow tests full headed Chromium through Xvfb with the official privacy-enhanced YouTube embed domain. Both are isolated from production.
 
 Previous attempts on hosted Linux and macOS returned YouTube player error 150 even for widely embedded demonstration videos; yt-dlp separately encountered YouTube's bot check. **Do not treat these runner failures as evidence that viewers cannot play the videos.** A self-hosted runner on a regular home/work network is the more appropriate next venue for browser QA if hosted runners remain blocked.
+
+## Practical next options
+
+- `youtube-availability.yml` is the fast, GitHub-hosted metadata availability check. A PASS means the official public oEmbed endpoint resolves the video; **it does not prove video playback**.
+- `youtube-playback-self-hosted.yml` runs the actual 2-second `<video>` playback verification on a user's registered x64 Linux self-hosted runner with Python and Node.js. It is manual-only and remains queued until such a runner is configured. The GitHub Actions runner must have network access to YouTube.
+- All previous hosted-browser experiments remain manual-only except the isolated headed experiment, whose push trigger is scoped to its own workflow file. Do not schedule repeated automated viewing.
+
+A hosted GitHub runner may be blocked from YouTube media streaming; changing the browser does not guarantee that this restriction disappears. The availability check is intentionally not used as a substitute PASS for actual playback.

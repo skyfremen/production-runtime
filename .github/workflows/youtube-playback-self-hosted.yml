@@ -1,0 +1,47 @@
+name: YouTube Playback Verification (Self-hosted)
+
+on:
+  workflow_dispatch:
+    inputs:
+      youtube_url:
+        description: "YouTube video/Shorts URL to play"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  verify-playback:
+    # Requires a registered, online x64 Linux self-hosted runner with Python, Node.js/npm.
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 8
+    env:
+      YOUTUBE_URL: ${{ inputs.youtube_url }}
+    steps:
+      - name: Load isolated source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, urllib.request
+          urllib.request.urlretrieve(
+            f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/tarball/{os.environ['GITHUB_SHA']}",
+            "/tmp/source.tgz")
+          PY
+          tar -xzf /tmp/source.tgz --strip-components 1 -C "${GITHUB_WORKSPACE}"
+
+      - name: Install Playwright
+        shell: bash
+        run: |
+          npm install --no-save playwright
+          npx playwright install chromium
+
+      - name: Check actual video playback for 2 seconds
+        shell: bash
+        run: node experiments/youtube-playback/check-playback.mjs
+
+      - name: Show diagnostics
+        if: always()
+        shell: bash
+        run: cat experiments/youtube-playback/artifacts/report.json 2>/dev/null || true
