@@ -21,7 +21,7 @@ ELEMENTS = {
 FORMATS = ("sign_results", "ranking", "grouped_elements", "trait_matches")
 CATEGORIES = ("romance", "friendship", "family", "workplace", "social_conflict",
               "hidden_habits", "personality_comparison")
-OPTIONAL_WINNER_FIELDS = {"category", "topic_tags"}
+OPTIONAL_WINNER_FIELDS = {"category", "topic_tags", "youtube_metadata"}
 SCORES = {"hook": 30, "curiosity": 25, "emotion": 20, "answers": 15, "originality": 10}
 DRAFT_FIELDS = {"winner_count", "winners"}
 WINNER_FIELDS = {"id", "format", "title", "duration_seconds",
@@ -72,6 +72,28 @@ def valid_content_labels(value):
             and all(type(tag) is str and re.fullmatch(r"[a-z][a-z0-9_]{0,31}", tag) for tag in tags)
             and len(tags) == len(set(tags)))
 
+def validate_youtube_metadata(metadata, prefix):
+    """Validate planner-authored upload metadata; legacy winners may omit it."""
+    require(type(metadata) is dict and set(metadata) == {'description', 'hashtags', 'tags'},
+            prefix + '_YOUTUBE_METADATA_SCHEMA')
+    description = metadata['description']
+    require(plain(description, 40, 450) and description == description.strip()
+            and '#' not in description, prefix + '_YOUTUBE_DESCRIPTION')
+    hashtags = metadata['hashtags']
+    require(type(hashtags) is list and 10 <= len(hashtags) <= 15
+            and all(type(h) is str and re.fullmatch(r'#[A-Za-z][A-Za-z0-9]{1,39}', h) for h in hashtags)
+            and len({h.casefold() for h in hashtags}) == len(hashtags),
+            prefix + '_YOUTUBE_HASHTAGS')
+    require({'#WackyAstrology', '#Zodiac', '#Shorts'} <= set(hashtags),
+            prefix + '_YOUTUBE_CORE_HASHTAGS')
+    tags = metadata['tags']
+    require(type(tags) is list and 10 <= len(tags) <= 15
+            and all(type(t) is str and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9' -]{1,59}", t) for t in tags)
+            and len({t.casefold() for t in tags}) == len(tags)
+            and sum(len(t) + 1 for t in tags) <= 400,
+            prefix + '_YOUTUBE_TAGS')
+
+
 def load_classifications(root):
     path = Path(root) / 'data/content-classifications.json'
     if not path.exists():
@@ -107,6 +129,8 @@ def validate(draft, previous=()):
         require(type(w) is dict and WINNER_FIELDS <= set(w) <= WINNER_FIELDS | OPTIONAL_WINNER_FIELDS,
                 tag + "_SCHEMA")
         require(valid_content_labels(w), tag + "_CONTENT_LABELS")
+        if 'youtube_metadata' in w:
+            validate_youtube_metadata(w['youtube_metadata'], tag)
         cid = w["id"]
         require(plain(cid) and re.fullmatch(r"za-[a-z0-9-]{8,64}", cid)
                 and cid not in ids, tag + "_ID")
