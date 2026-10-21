@@ -70,7 +70,12 @@ def upload_body(item):
     metadata=item['youtube']; description=str(metadata['description']).strip()
     description+='\n\n'+' '.join(metadata['hashtags'])
     require(len(description.encode())<=5000,'description too long')
+    # Keep the legacy tag payload unchanged for previously finalized requests.
     tags=[marker(item['content_id']),'Wacky Astrology','Zodiac','Shorts']
+    for tag in metadata.get('tags', []):
+        if tag.casefold() not in {existing.casefold() for existing in tags}:
+            tags.append(tag)
+    require(sum(len(tag)+1 for tag in tags)<=500,'tags too long')
     return {'snippet':{'title':metadata['title'],'description':description,'tags':tags,'categoryId':'24'},
         'status':{'privacyStatus':'private','publishAt':item['publication']['publish_at'],'selfDeclaredMadeForKids':False}}
 
