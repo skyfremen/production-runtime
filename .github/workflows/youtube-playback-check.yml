@@ -1,6 +1,11 @@
 name: YouTube Playback Smoke Test
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/youtube-playback-check.yml"
+      - "experiments/youtube-playback/**"
   workflow_dispatch:
     inputs:
       youtube_url:
@@ -8,11 +13,6 @@ on:
         required: true
         type: string
         default: "https://www.youtube.com/watch?v=jNQXAC9IVRw"
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/youtube-playback-check.yml"
-      - "experiments/youtube-playback/**"
 
 permissions:
   contents: read
@@ -25,27 +25,32 @@ jobs:
       YOUTUBE_URL: ${{ inputs.youtube_url }}
 
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
-      - name: Install browser dependencies
+      - name: Load exact source (no third-party actions)
+        shell: bash
         run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          import urllib.request
+          url = f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/tarball/{os.environ['GITHUB_SHA']}"
+          urllib.request.urlretrieve(url, "/tmp/playback-source.tgz")
+          PY
+          tar --extract --gzip --file /tmp/playback-source.tgz \
+            --strip-components 1 --directory "${GITHUB_WORKSPACE}"
+
+      - name: Install Playwright and Chromium
+        run: |
+          node --version
+          npm --version
           npm install --no-save playwright
           npx playwright install --with-deps chromium
 
       - name: Check YouTube playback
         run: node experiments/youtube-playback/check-playback.mjs
 
-      - name: Upload playback diagnostics
+      - name: Print diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: youtube-playback-diagnostics
-          path: experiments/youtube-playback/artifacts/
-          if-no-files-found: ignore
-          retention-days: 7
+        run: |
+          if [ -f experiments/youtube-playback/artifacts/report.json ]; then
+            cat experiments/youtube-playback/artifacts/report.json
+          fi
