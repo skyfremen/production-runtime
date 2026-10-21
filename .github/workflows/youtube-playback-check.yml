@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      YOUTUBE_URL: ${{ inputs.youtube_url || 'https://www.youtube.com/watch?v=jNQXAC9IVRw' }}
+      YOUTUBE_URL: ${{ inputs.youtube_url }}
 
     steps:
       - name: Check out repository
