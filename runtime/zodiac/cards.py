@@ -27,7 +27,8 @@ WHITE = (251, 250, 251)
 CYAN = (119, 236, 224)
 GOLD = (255, 222, 90)
 GREEN = (142, 242, 149)
-CTA_TEXT = "❤️ Like if you agree"
+CTA_LINES = (("❤️", "Agree? Like & share"), ("💬", "Disagree? Tell us why"))
+CTA_TEXT = "\n".join(f"{icon} {label}" for icon, label in CTA_LINES)
 
 SIGN_SYMBOLS = {
     "aries": "♈", "taurus": "♉", "gemini": "♊", "cancer": "♋",
@@ -128,16 +129,18 @@ def render_card(item, path):
         y+=int(title_size*1.35)
     cta_size=round(title_size*.75)
     cta_font=font(cta_size,True)
-    heart=render_emoji("❤️",cta_size)
-    label="Like if you agree"
     gap=round(cta_size*.25)
-    cta_x=(LEFT+RIGHT-heart.width-gap-text_width(d,label,cta_font))//2
     cta_y=y
-    label_box=d.textbbox((0,0),label,font=cta_font)
-    heart_y=y+label_box[1]+(label_box[3]-label_box[1]-heart.height)//2
-    im.paste(heart,(cta_x,heart_y),heart)
-    d.text((cta_x+heart.width+gap,y),label,font=cta_font,fill=WHITE)
-    y+=int(cta_size*1.35)
+    for icon,label in CTA_LINES:
+        emoji=render_emoji(icon,cta_size)
+        width=emoji.width+gap+text_width(d,label,cta_font)
+        require(width<=RIGHT-LEFT,"CTA_TOO_WIDE_FOR_PHONE_SCREEN")
+        cta_x=(LEFT+RIGHT-width)//2
+        label_box=d.textbbox((0,0),label,font=cta_font)
+        emoji_y=y+label_box[1]+(label_box[3]-label_box[1]-emoji.height)//2
+        im.paste(emoji,(cta_x,emoji_y),emoji)
+        d.text((cta_x+emoji.width+gap,y),label,font=cta_font,fill=WHITE)
+        y+=int(cta_size*1.35)
     y+=33
     d.line((LEFT,y,RIGHT,y),fill=(92,92,92),width=3)
     y+=32
