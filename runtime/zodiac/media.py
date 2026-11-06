@@ -170,7 +170,14 @@ def prepare(root, content_id, work, cache=None, *, publish_at=None):
                 'catalogue_sha256':{path.name:sha256(path.read_bytes()).hexdigest() for path in paths}}
     return video,music,provenance
 
-def encode(card, background, music, mp4):
-    # Text mask excludes the black card, preserving the existing full-screen layout.
-    graph="[0:v]eq=brightness=-0.06:contrast=0.85[v];[1:v]colorkey=0x000000:0.01:0.0[txt];[v][txt]overlay=0:0:shortest=1,format=yuv420p[out]"
+def encode(card, background, music, mp4, *, panel=None):
+    # True-alpha text preserves opaque black strokes on bright moving footage.
+    darken=''
+    if panel is not None:
+        x,y,width,height=panel
+        if not all(type(v) is int and v>=0 for v in panel) or width<=0 or height<=0:
+            raise ValueError('INVALID_ANSWER_PANEL')
+        darken=f',drawbox=x={x}:y={y}:w={width}:h={height}:color=black@0.62:t=fill'
+    graph=f"[0:v]eq=brightness=-0.06:contrast=0.85{darken}[v];[1:v]format=rgba[txt];[v][txt]overlay=0:0:shortest=1,format=yuv420p[out]"
     run(['ffmpeg','-nostdin','-v','error','-y','-threads','2','-i',str(background),'-loop','1','-framerate','30','-i',str(card),'-i',str(music),'-filter_complex_threads','1','-filter_complex',graph,'-map','[out]','-map','2:a:0','-t','6','-c:v','libx264','-threads','2','-preset','fast','-crf','19','-pix_fmt','yuv420p','-c:a','aac','-ar','48000','-ac','2','-b:a','192k','-movflags','+faststart',str(mp4)])
+

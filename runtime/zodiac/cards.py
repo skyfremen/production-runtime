@@ -107,19 +107,20 @@ def choose_row_font(draw, entries, row_height):
     maxwidth=RIGHT-LEFT
     for size in range(min(36, int(row_height*.62)), 23, -1):
         f1=font(size,True)
-        f2=font(size)
+        f2=font(size,True)
         ok=True
         for kind,label,answer in entries:
             if kind=="group":continue
-            w=text_width(draw,label,f1)+22+text_width(draw,answer,f2)
+            w=text_width(draw,label,f1)+22+text_width(draw,answer,f2)+4
             if w>maxwidth:
                 ok=False
                 break
         if ok:return size
     raise MediaRejected("ROWS_TOO_LONG_FOR_PHONE_SCREEN")
 
-def render_card(item, path):
-    im=Image.new("RGB",(W,H),BG)
+def render_card(item, path, *, overlay=False):
+    # Production uses true alpha: chroma-keying black erases black text outlines.
+    im=Image.new("RGBA" if overlay else "RGB",(W,H),(0,0,0,0) if overlay else BG)
     d=ImageDraw.Draw(im)
     lines,title_size=title_lines(d,item["title"])
     y=235
@@ -144,6 +145,7 @@ def render_card(item, path):
     y+=33
     d.line((LEFT,y,RIGHT,y),fill=(92,92,92),width=3)
     y+=32
+    row_top=y
     entries=ordered_rows(item)
     bottom=1515
     row_height=min(81,(bottom-y)/len(entries))
@@ -152,11 +154,14 @@ def render_card(item, path):
     group_size=min(size+2,30)
     for kind,label,answer in entries:
         if kind=="group":
-            d.text((LEFT+4,int(y+3)),label,font=font(group_size,True),fill=GOLD)
+            d.text((LEFT+4,int(y+3)),label,font=font(group_size,True),fill=GOLD,
+                   stroke_width=2,stroke_fill=BG)
         else:
-            d.text((LEFT+4,int(y+3)),label,font=font(size,True),fill=WHITE)
+            d.text((LEFT+4,int(y+3)),label,font=font(size,True),fill=WHITE,
+                   stroke_width=2,stroke_fill=BG)
             start=LEFT+4+text_width(d,label,font(size,True))+22
-            d.text((start,int(y+3)),answer,font=font(size),fill=CYAN)
+            d.text((start,int(y+3)),answer,font=font(size,True),fill=WHITE,
+                   stroke_width=2,stroke_fill=BG)
         y+=row_height
     require(y<=bottom+1,"TEXT_CLIPPED")
     path=Path(path)
@@ -166,6 +171,7 @@ def render_card(item, path):
             "cta_text":CTA_TEXT,"cta_font_px":cta_size,"cta_y":cta_y,
             "row_font_px":size,"rows":len(entries),
             "content_bottom_y":round(y),"safe_right_x":RIGHT,
+            "answer_panel":[LEFT-20,round(row_top)-12,RIGHT-LEFT+40,round(y-row_top)+24],
             "background":"solid_black","all_text_visible_from_frame_zero":True}
 
 def cmd(args, timeout=120):
@@ -198,7 +204,7 @@ def qc(mp4, creative, png, layout, *, music=False):
     with Image.open(png) as im:
         require(im.size==(W,H),"WRONG_IMAGE_SIZE")
         # Card must be pure black at all corners, and visibly contain colorful text.
-        require(all(im.getpixel(loc)==BG for loc in
+        require(all(im.convert('RGB').getpixel(loc)==BG for loc in
                     [(0,0),(W-1,0),(0,H-1),(W-1,H-1)]),
                 "NOT_SOLID_BLACK_BACKGROUND")
         top=im.crop((LEFT,235,RIGHT,layout["content_bottom_y"])).convert("L")
@@ -230,13 +236,13 @@ def generate(validated_path, output, *, catalogue_root=None, media_cache=None, p
             cid=item["id"]
             png=tmp/"previews"/(cid+".png")
             mp4=tmp/"videos"/(cid+".mp4")
-            layout=render_card(item,png)
+            layout=render_card(item,png,overlay=catalogue_root is not None)
             mp4.parent.mkdir(parents=True,exist_ok=True)
             provenance={}
             if catalogue_root is not None:
                 from .media import prepare, encode
                 bg,music,provenance=prepare(catalogue_root,cid,tmp/'media'/cid,cache=media_cache,publish_at=publish_at)
-                encode(png,bg,music,mp4)
+                encode(png,bg,music,mp4,panel=layout['answer_panel'])
                 layout['background']='approved_catalogue'
             else:
                 cmd(["ffmpeg","-hide_banner","-loglevel","error","-y",
@@ -278,3 +284,4 @@ def main(argv=None):
 
 if __name__=="__main__":
     raise SystemExit(main())
+
