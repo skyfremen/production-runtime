@@ -1,0 +1,86 @@
+name: Zodiac — replace deleted upload
+run-name: Zodiac replacement ${{ inputs.replacement_path }}
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha: {required: true, type: string}
+      replacement_path: {required: true, type: string}
+      execution_id: {required: true, type: string}
+permissions:
+  contents: read
+  packages: read
+  actions: write
+jobs:
+  replace:
+    if: github.repository == 'skyfremen/production-runtime' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: exec
+    timeout-minutes: 15
+    concurrency:
+      group: zodiac-execution-${{ inputs.execution_id }}
+      cancel-in-progress: false
+    container:
+      image: ghcr.io/skyfremen/runtime-base@sha256:c44ac7ba2457e0757954252ae24e266dd62e57a63f172d0d3520348ae1f9bd12
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      REPLACEMENT_PATH: ${{ inputs.replacement_path }}
+      EXECUTION_ID: ${{ inputs.execution_id }}
+      RUNTIME_SHA: ${{ github.sha }}
+      PYTHONPATH: .runtime/runtime
+    steps:
+      - name: Fetch exact runtime and approved private request
+        env:
+          STATE_TOKEN: ${{ secrets.ZODIAC_STATE_TOKEN }}
+        run: |
+          python - <<'PY'
+          import base64, os, re, subprocess
+          from pathlib import Path
+          assert re.fullmatch(r'[0-9a-f]{40}',os.environ['SOURCE_SHA'])
+          assert re.fullmatch(r'[0-9a-f]{40}',os.environ['RUNTIME_SHA'])
+          assert re.fullmatch(r'content/replacements/replace-[A-Za-z0-9-]+\.json',os.environ['REPLACEMENT_PATH'])
+          assert re.fullmatch(r'ex-[0-9a-f]{24}',os.environ['EXECUTION_ID'])
+          if not os.environ.get('STATE_TOKEN'): raise SystemExit('ZODIAC_STATE_TOKEN_REQUIRED')
+          def git(*args): subprocess.run(['git',*args],check=True)
+          for path,repo,sha in (('.state','skyfremen/zodiac-workflow',os.environ['SOURCE_SHA']),
+                                ('.runtime','skyfremen/production-runtime',os.environ['RUNTIME_SHA'])):
+              git('init','--quiet',path)
+              git('-C',path,'remote','add','origin','https://github.com/'+repo+'.git')
+              if path=='.state':
+                  auth=base64.b64encode(('x-access-token:'+os.environ['STATE_TOKEN']).encode()).decode()
+                  with Path(path,'.git/config').open('a') as file:
+                      file.write('\n[http "https://github.com/"]\n\textraheader = AUTHORIZATION: basic '+auth+'\n')
+              git('-C',path,'fetch','--quiet','origin','main')
+              git('-C',path,'checkout','--quiet','--detach',sha)
+          PY
+      - name: Verify remote deletion and archive old active records atomically
+        id: archive
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ZODIAC_CLIENT_ID: ${{ secrets.ZODIAC_CLIENT_ID }}
+          ZODIAC_CLIENT_SECRET: ${{ secrets.ZODIAC_CLIENT_SECRET }}
+          ZODIAC_REFRESH_TOKEN: ${{ secrets.ZODIAC_REFRESH_TOKEN }}
+        run: |
+          python -m zodiac.replacement --root "$GITHUB_WORKSPACE/.state" --request "$REPLACEMENT_PATH" \
+            --authorization-source-sha "$SOURCE_SHA" --runtime-sha "$RUNTIME_SHA" --execution-id "$EXECUTION_ID"
+      - name: Dispatch existing execution against archived state and current renderer
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RECOVERY_SOURCE: ${{ steps.archive.outputs.source_sha }}
+          EXECUTION_ID: ${{ steps.archive.outputs.execution_id }}
+        run: |
+          python - <<'PY'
+          import json, os, urllib.request
+          payload={'ref':'main','inputs':{'execution_id':os.environ['EXECUTION_ID'],'source_sha':os.environ['RECOVERY_SOURCE']}}
+          request=urllib.request.Request('https://api.github.com/repos/skyfremen/production-runtime/actions/workflows/zodiac.yml/dispatches',
+              data=json.dumps(payload).encode(),method='POST',headers={'Authorization':'Bearer '+os.environ['GITHUB_TOKEN'],
+              'Accept':'application/vnd.github+json','Content-Type':'application/json'})
+          with urllib.request.urlopen(request,timeout=30) as response:
+              if response.status!=204: raise SystemExit('ZODIAC_REPLACEMENT_DISPATCH_REJECTED')
+          print('Replacement archived and exact execution dispatched.')
+          PY
