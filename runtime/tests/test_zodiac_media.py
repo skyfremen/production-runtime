@@ -46,6 +46,50 @@ class ZodiacBackgroundRotationTests(unittest.TestCase):
         self.assertEqual(len(results), 120)
         self.assertEqual(set(amounts), {bg['category'] for bg in results})
 
+    def test_approved_pexels_download_endpoint_and_host_restrictions(self):
+        from zodiac.media import source
+        import io
+        with tempfile.TemporaryDirectory() as td:
+            cache = Path(td)
+            item = {'id':'px-34554207',
+                    'download_url':'https://www.pexels.com/download/video/34554207/'}
+            with patch('zodiac.media.urlopen', return_value=io.BytesIO(b'video-fixture')) as mocked:
+                path=source(item,cache,'video')
+                self.assertEqual(path.read_bytes(),b'video-fixture')
+                self.assertEqual(mocked.call_count,1)
+            blocked = [
+                'http://www.pexels.com/download/video/34554207/',
+                'https://www.pexels.com/download/video/999999/',
+                'https://www.pexels.com/download/video/34554207/?redirect=https://evil.example',
+                'https://untrusted.example/download/video/34554207/',
+            ]
+            for url in blocked:
+                with self.subTest(url=url),self.assertRaisesRegex(ValueError,'UNAPPROVED_MEDIA_HOST'):
+                    source({'id':'px-34554207','download_url':url},cache,'video')
+
+    def test_new_category_rotation_across_scheduled_slots(self):
+        from datetime import datetime,timedelta,timezone
+        from zoneinfo import ZoneInfo
+        from zodiac.media import select_assets
+        categories = ('moonlit_reflections','underwater_light','gold_particles',
+                      'liquid_ink','space','night_sky','aurora_lights')
+        backgrounds={'assets':[{'id':f'{cat}-{k}','category':cat}
+                               for cat in categories for k in range(4)]}
+        audio={'assets':[{'id':'track'}]}
+        config={'timezone':'Asia/Singapore','slots':['00:30','08:00','19:30']}
+        day=datetime(2026,11,8,tzinfo=ZoneInfo('Asia/Singapore'))
+        chosen=[]
+        for n in range(56):
+            t=day+timedelta(days=n//3)
+            hour,minute=map(int,config['slots'][n%3].split(':'))
+            slot=(t+timedelta(hours=hour,minutes=minute)).astimezone(timezone.utc).isoformat()
+            bg,_=select_assets(backgrounds,audio,'zodiac-'+str(n),
+                               publish_at=slot,slot_config=config)
+            self.assertNotIn(bg['id'],[x['id'] for x in chosen[-15:]])
+            if chosen:self.assertNotEqual(bg['category'],chosen[-1]['category'])
+            chosen.append(bg)
+        self.assertEqual(set(categories),set(x['category'] for x in chosen))
+
     def test_legacy_and_unscheduled_selection_are_stable(self):
         from zodiac.media import select_assets
         backgrounds = {'assets': [{'id':'old-one','category':'space'},
