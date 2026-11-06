@@ -209,7 +209,7 @@ def qc(mp4, creative, png, layout, *, music=False):
             "audio_streams":int(music),"frames":frames,"duration_seconds":dur,
             "size_bytes":mp4.stat().st_size,**layout}
 
-def generate(validated_path, output, *, catalogue_root=None, media_cache=None):
+def generate(validated_path, output, *, catalogue_root=None, media_cache=None, publish_at=None):
     doc=json.loads(Path(validated_path).read_text(encoding="utf8"))
     require(doc.get("status")=="approved_for_black_preview" and
             doc.get("lane")=="zodiac" and
@@ -235,7 +235,7 @@ def generate(validated_path, output, *, catalogue_root=None, media_cache=None):
             provenance={}
             if catalogue_root is not None:
                 from .media import prepare, encode
-                bg,music,provenance=prepare(catalogue_root,cid,tmp/'media'/cid,cache=media_cache)
+                bg,music,provenance=prepare(catalogue_root,cid,tmp/'media'/cid,cache=media_cache,publish_at=publish_at)
                 encode(png,bg,music,mp4)
                 layout['background']='approved_catalogue'
             else:
