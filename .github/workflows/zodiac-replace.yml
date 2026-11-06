@@ -82,6 +82,8 @@ jobs:
           path=handoff(root,os.environ['EXECUTION_ID'],os.environ['RECOVERY_SOURCE'])
           git(root,'add','--',path)
           if git(root,'diff','--cached','--name-only'):
+              git(root,'config','user.name','github-actions[bot]')
+              git(root,'config','user.email','41898282+github-actions[bot]@users.noreply.github.com')
               git(root,'commit','-m','[replacement] hand off exact execution through private rerender')
               git(root,'push','origin','HEAD:main')
           print('Replacement archived and private exact-execution rerender requested.')
