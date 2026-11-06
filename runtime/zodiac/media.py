@@ -69,7 +69,15 @@ def source(asset, cache, kind):
         raise ValueError('INVALID_MEDIA_ID')
     url=asset['download_url'];parsed=urlparse(url)
     allowed={'videos.pexels.com'} if kind=='video' else {'cdn.pixabay.com'}
-    if parsed.scheme!='https' or parsed.hostname not in allowed:
+    # Pexels provides a canonical download endpoint when the final CDN filename
+    # is not exposed on the video page. Permit only its exact ID-matched path.
+    canonical_pexels = (
+        kind == 'video' and parsed.hostname == 'www.pexels.com'
+        and parsed.path == f"/download/video/{ident.removeprefix('px-')}/"
+        and not parsed.query and not parsed.fragment
+        and re.fullmatch(r'px-[0-9]+', ident) is not None
+    )
+    if parsed.scheme!='https' or (parsed.hostname not in allowed and not canonical_pexels):
         raise ValueError('UNAPPROVED_MEDIA_HOST')
     target=cache/(ident+('.mp4' if kind=='video' else '.mp3'))
     if not target.exists():
