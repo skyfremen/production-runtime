@@ -67,6 +67,44 @@ class ZodiacBackgroundRotationTests(unittest.TestCase):
                 with self.subTest(url=url),self.assertRaisesRegex(ValueError,'UNAPPROVED_MEDIA_HOST'):
                     source({'id':'px-34554207','download_url':url},cache,'video')
 
+    def test_pending_pixabay_backgrounds_are_excluded_from_all_rotation_modes(self):
+        from zodiac.media import select_assets
+        background = {'assets': [
+            {'id':'safe-1','category':'space'},
+            {'id':'pb-381078','category':'constellation_lines','enabled':False},
+            {'id':'pb-340950','category':'constellation_lines','enabled':False},
+        ]}
+        audio = {'assets':[{'id':'music'}]}
+        config = {'timezone':'Asia/Singapore','slots':['00:30','08:00','19:30']}
+        for n in range(200):
+            cid=f'za-{n}'
+            a,_=select_assets(background,audio,cid)
+            b,_=select_assets(background,audio,cid,
+                              publish_at='2026-11-08T00:00:00Z',slot_config=config)
+            self.assertEqual(a['id'],'safe-1')
+            self.assertEqual(b['id'],'safe-1')
+        with self.assertRaisesRegex(ValueError,'EMPTY_ZODIAC_CATALOGUE'):
+            select_assets({'assets':background['assets'][1:]},audio,'za-0')
+
+    def test_pixabay_download_requires_exact_approved_video_id_and_host(self):
+        from zodiac.media import source
+        from unittest.mock import patch
+        import io
+        with tempfile.TemporaryDirectory() as td:
+            video={'id':'pb-381078','download_url':
+                   'https://pixabay.com/videos/download/video-381078_large.mp4'}
+            with patch('zodiac.media.urlopen',return_value=io.BytesIO(b'demo')):
+                self.assertEqual(source(video,Path(td),'video').read_bytes(),b'demo')
+            for link in (
+                'https://pixabay.com/videos/download/video-340950_large.mp4',
+                'https://pixabay.com/videos/download/video-381078_tiny.mp4',
+                'https://evil.example/videos/download/video-381078_large.mp4',
+                'https://pixabay.com/videos/download/video-381078_large.mp4?to=evil',
+                'http://pixabay.com/videos/download/video-381078_large.mp4',
+            ):
+                with self.subTest(url=link),self.assertRaisesRegex(ValueError,'UNAPPROVED_MEDIA_HOST'):
+                    source({'id':'pb-381078','download_url':link},Path(td),'video')
+
     def test_new_category_rotation_across_scheduled_slots(self):
         from datetime import datetime,timedelta,timezone
         from zoneinfo import ZoneInfo
