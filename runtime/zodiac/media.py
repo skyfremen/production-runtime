@@ -46,7 +46,8 @@ def select_assets(backgrounds, audio, content_id, *, publish_at=None, slot_confi
     Music stays independently hashed from the immutable content ID.
     """
     digest = sha256(content_id.encode()).digest()
-    videos, tracks = backgrounds['assets'], audio['assets']
+    videos = [asset for asset in backgrounds['assets'] if asset.get('enabled', True) is not False]
+    tracks = audio['assets']
     if not videos or not tracks:
         raise ValueError('EMPTY_ZODIAC_CATALOGUE')
     ordinal = _slot_ordinal(publish_at, slot_config)
@@ -77,7 +78,16 @@ def source(asset, cache, kind):
         and not parsed.query and not parsed.fragment
         and re.fullmatch(r'px-[0-9]+', ident) is not None
     )
-    if parsed.scheme!='https' or (parsed.hostname not in allowed and not canonical_pexels):
+    canonical_pixabay = (
+        kind == 'video' and parsed.hostname == 'pixabay.com'
+        and re.fullmatch(r'pb-[0-9]+', ident) is not None
+        and parsed.path in (
+            f"/videos/download/video-{ident.removeprefix('pb-')}_large.mp4",
+            f"/videos/download/video-{ident.removeprefix('pb-')}_medium.mp4",
+        )
+        and not parsed.query and not parsed.fragment
+    )
+    if parsed.scheme!='https' or (parsed.hostname not in allowed and not canonical_pexels and not canonical_pixabay):
         raise ValueError('UNAPPROVED_MEDIA_HOST')
     target=cache/(ident+('.mp4' if kind=='video' else '.mp3'))
     if not target.exists():
