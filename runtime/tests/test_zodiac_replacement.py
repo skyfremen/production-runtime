@@ -166,5 +166,16 @@ class ReplacementTests(unittest.TestCase):
             authorization(self.root,self.path,expected_execution_id='ex-'+'f'*24)
         self.assertEqual(before,self.snapshot())
 
+    def test_handoff_creates_one_idempotent_private_rerender_request(self):
+        from zodiac.replacement import handoff
+        self.prepare(); before=self.snapshot()
+        path=handoff(self.root,self.execution['execution_id'],SOURCE)
+        after=self.snapshot()
+        self.assertEqual({path},set(after)-set(before))
+        self.assertEqual({'source_sha':SOURCE,'execution_ids':[self.execution['execution_id']]},
+                         json.loads((self.root/path).read_text()))
+        handoff(self.root,self.execution['execution_id'],SOURCE)
+        self.assertEqual(after,self.snapshot())
+
 
 if __name__=='__main__': unittest.main()

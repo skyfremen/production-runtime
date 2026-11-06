@@ -114,6 +114,17 @@ def git(root,*args):
     return subprocess.check_output(['git','-C',str(root),*args],stderr=subprocess.PIPE).decode().strip()
 
 
+def handoff(root, execution_id, source_sha):
+    root=Path(root)
+    require(EX2.fullmatch(str(execution_id)) and SHA.fullmatch(str(source_sha)), 'invalid handoff identity')
+    execution=load(root/f'content/executions/{execution_id}.json')
+    archive=load(root/f"content/replacement-archives/{execution['content_id']}.json")
+    require(archive.get('execution_id')==execution_id, 'handoff archive identity mismatch')
+    path=f'content/rerender/rerender-replacement-{execution_id}.json'
+    immutable(root/path,{'source_sha':source_sha,'execution_ids':[execution_id]})
+    return path
+
+
 def check_active_runs(execution_id):
     token=os.environ.get('GITHUB_TOKEN',''); require(token, 'runtime Actions token missing')
     runs=[]
@@ -151,7 +162,10 @@ def main(argv=None):
         git(root,'config','user.email','41898282+github-actions[bot]@users.noreply.github.com')
         git(root,'commit','-m','[replacement] archive verified deleted Zodiac upload')
         git(root,'push','origin','HEAD:main')
-    out['source_sha']=git(root,'rev-parse','HEAD')
+    # Stable across retries even after context/evidence/result commits are added.
+    archive_commits=git(root,'log','--diff-filter=A','--format=%H','--',out['archive_path']).splitlines()
+    require(len(archive_commits)==1 and SHA.fullmatch(archive_commits[0]), 'archive source commit ambiguous')
+    out['source_sha']=archive_commits[0]
     if os.environ.get('GITHUB_OUTPUT'):
         with open(os.environ['GITHUB_OUTPUT'],'a') as output:
             for key in ('source_sha','execution_id'): output.write(f'{key}={out[key]}\n')

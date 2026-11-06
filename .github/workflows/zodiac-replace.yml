@@ -9,7 +9,7 @@ on:
 permissions:
   contents: read
   packages: read
-  actions: write
+  actions: read
 jobs:
   replace:
     if: github.repository == 'skyfremen/production-runtime' && github.ref == 'refs/heads/main'
@@ -68,19 +68,21 @@ jobs:
         run: |
           python -m zodiac.replacement --root "$GITHUB_WORKSPACE/.state" --request "$REPLACEMENT_PATH" \
             --authorization-source-sha "$SOURCE_SHA" --runtime-sha "$RUNTIME_SHA" --execution-id "$EXECUTION_ID"
-      - name: Dispatch existing execution against archived state and current renderer
+      - name: Hand off through the existing private exact-execution rerender route
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RECOVERY_SOURCE: ${{ steps.archive.outputs.source_sha }}
           EXECUTION_ID: ${{ steps.archive.outputs.execution_id }}
         run: |
           python - <<'PY'
-          import json, os, urllib.request
-          payload={'ref':'main','inputs':{'execution_id':os.environ['EXECUTION_ID'],'source_sha':os.environ['RECOVERY_SOURCE']}}
-          request=urllib.request.Request('https://api.github.com/repos/skyfremen/production-runtime/actions/workflows/zodiac.yml/dispatches',
-              data=json.dumps(payload).encode(),method='POST',headers={'Authorization':'Bearer '+os.environ['GITHUB_TOKEN'],
-              'Accept':'application/vnd.github+json','Content-Type':'application/json'})
-          with urllib.request.urlopen(request,timeout=30) as response:
-              if response.status!=204: raise SystemExit('ZODIAC_REPLACEMENT_DISPATCH_REJECTED')
-          print('Replacement archived and exact execution dispatched.')
+          import os
+          from pathlib import Path
+          from zodiac.replacement import git, handoff
+          root=Path('.state').resolve()
+          git(root,'fetch','origin','main'); git(root,'checkout','--detach','origin/main')
+          path=handoff(root,os.environ['EXECUTION_ID'],os.environ['RECOVERY_SOURCE'])
+          git(root,'add','--',path)
+          if git(root,'diff','--cached','--name-only'):
+              git(root,'commit','-m','[replacement] hand off exact execution through private rerender')
+              git(root,'push','origin','HEAD:main')
+          print('Replacement archived and private exact-execution rerender requested.')
           PY
