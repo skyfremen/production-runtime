@@ -1,5 +1,7 @@
 """Approved private Zodiac catalogues: native 1080p footage and six-second music."""
 from hashlib import sha256
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from array import array
 import json
 import math
@@ -17,12 +19,49 @@ def run(args):
         raise ValueError('ZODIAC_MEDIA_COMMAND: '+p.stderr[-500:])
     return p.stdout
 
-def select_assets(backgrounds, audio, content_id):
-    digest=sha256(content_id.encode()).digest()
-    lists=[backgrounds['assets'],audio['assets']]
-    if not all(lists):
+BACKGROUND_FAMILY_ORDER = (
+    'flowing_silk', 'gold_particles', 'liquid_ink', 'aurora_lights',
+    'space', 'night_sky',
+)
+
+def _slot_ordinal(publish_at, slot_config):
+    """Stable sequential position across the configured Singapore publication slots."""
+    if not publish_at or not slot_config:
+        return None
+    local = datetime.fromisoformat(publish_at.replace('Z', '+00:00')).astimezone(
+        ZoneInfo(slot_config['timezone']))
+    slots = slot_config['slots']
+    local_slot = local.strftime('%H:%M')
+    # Legacy reservations can use older slot schedules; keep them renderable.
+    if local_slot not in slots:
+        return None
+    return local.date().toordinal() * len(slots) + slots.index(local_slot)
+
+def select_assets(backgrounds, audio, content_id, *, publish_at=None, slot_config=None):
+    """Rotate visual families and clips by scheduled slot, without shared mutable state.
+
+    Every adjacent planned slot uses a different family. An individual clip only
+    recurs after all clips in its own family have been used, even between separate
+    production jobs. Unscheduled previews and legacy slots retain hash selection.
+    Music stays independently hashed from the immutable content ID.
+    """
+    digest = sha256(content_id.encode()).digest()
+    videos, tracks = backgrounds['assets'], audio['assets']
+    if not videos or not tracks:
         raise ValueError('EMPTY_ZODIAC_CATALOGUE')
-    return tuple(a[int.from_bytes(digest[i*4:i*4+4],'big')%len(a)] for i,a in enumerate(lists))
+    ordinal = _slot_ordinal(publish_at, slot_config)
+    if ordinal is None:
+        background = videos[int.from_bytes(digest[:4], 'big') % len(videos)]
+    else:
+        family_names = {a['category'] for a in videos}
+        families = [c for c in BACKGROUND_FAMILY_ORDER if c in family_names]
+        families.extend(sorted(family_names - set(families)))
+        family = families[ordinal % len(families)]
+        pool = sorted((a for a in videos if a['category'] == family),
+                      key=lambda a: sha256((family + '|' + a['id']).encode()).digest())
+        background = pool[(ordinal // len(families)) % len(pool)]
+    music = tracks[int.from_bytes(digest[4:8], 'big') % len(tracks)]
+    return background, music
 
 def source(asset, cache, kind):
     ident=asset['id']
@@ -53,24 +92,32 @@ def catalogue_paths(root):
     background=data/'backgrounds.json'
     return background,data/'audio.json'
 
-def prepare(root, content_id, work, cache=None):
+def prepare(root, content_id, work, cache=None, *, publish_at=None):
     root=Path(root);work=Path(work);work.mkdir(parents=True,exist_ok=True)
     cache=Path(cache) if cache else work/'sources';cache.mkdir(parents=True,exist_ok=True)
     paths=catalogue_paths(root)
     docs=[json.loads(path.read_text()) for path in paths]
     if any(d.get('version')!=1 or d['output']['duration_seconds']!=6 for d in docs):
         raise ValueError('UNSUPPORTED_MEDIA_CATALOGUE')
-    background,audio=select_assets(*docs,content_id)
+    slot_path=root/'data'/'publish-slots.json'
+    slot_config=json.loads(slot_path.read_text()) if publish_at and slot_path.exists() else None
+    background,audio=select_assets(*docs,content_id,publish_at=publish_at,slot_config=slot_config)
     raw_video=source(background,cache,'video');raw_audio=source(audio,cache,'audio')
     probe=json.loads(run(['ffprobe','-v','error','-select_streams','v:0','-show_streams','-of','json',str(raw_video)]))['streams'][0]
-    if (probe['width'],probe['height'])!=(1080,1920):
-        raise ValueError('ZODIAC_NATIVE_VERTICAL_1080P_REQUIRED')
+    width,height=probe['width'],probe['height']
+    if width<1080 or height<1920 or not .49<=width/height<=.65:
+        raise ValueError('ZODIAC_VERTICAL_MIN_1080P_REQUIRED')
     video=work/'background.mp4';music=work/'music.wav'
     v={**docs[0]['loop_defaults'],**background['loop']}
     if not (v['method']=='circular_crossfade' and v['playback_speed']==.5 and v['source_duration_seconds']==3.5 and v['crossfade_seconds']==1 and v['crossfade_curve']=='cosine' and v['blend_position']=='start' and v['playback_direction']=='forward'):
         raise ValueError('UNSUPPORTED_BACKGROUND_LOOP_RECIPE')
     start=float(v['source_start_seconds'])
-    graph="[0:v]setpts=2*(PTS-STARTPTS),fps=30,trim=end_frame=30,setpts=PTS-STARTPTS[t];[1:v]setpts=2*(PTS-STARTPTS),fps=30,trim=end_frame=30,setpts=PTS-STARTPTS[h];[t][h]blend=all_expr='A*(1-(1-cos(PI*T))/2)+B*((1-cos(PI*T))/2)'[join];[2:v]setpts=2*(PTS-STARTPTS),fps=30,trim=end_frame=150,setpts=PTS-STARTPTS[b];[join][b]concat=n=2:v=1:a=0,format=yuv420p[v]"
+    fit=",scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1"
+    graph=("[0:v]setpts=2*(PTS-STARTPTS),fps=30,trim=end_frame=30"+fit+",setpts=PTS-STARTPTS[t];"
+           "[1:v]setpts=2*(PTS-STARTPTS),fps=30,trim=end_frame=30"+fit+",setpts=PTS-STARTPTS[h];"
+           "[t][h]blend=all_expr='A*(1-(1-cos(PI*T))/2)+B*((1-cos(PI*T))/2)'[join];"
+           "[2:v]setpts=2*(PTS-STARTPTS),fps=30,trim=end_frame=150"+fit+",setpts=PTS-STARTPTS[b];"
+           "[join][b]concat=n=2:v=1:a=0,format=yuv420p[v]")
     args=['ffmpeg','-nostdin','-v','error','-y']
     for offset in (3,0,.5):args+=['-threads','2','-ss',str(start+offset),'-i',str(raw_video)]
     run(args+['-filter_complex_threads','1','-filter_complex',graph,'-map','[v]','-an','-frames:v','180','-c:v','libx264','-threads','2','-preset','fast','-crf','20','-movflags','+faststart',str(video)])
