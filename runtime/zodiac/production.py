@@ -30,7 +30,7 @@ def produce(root,execution_id,*,source_sha,runtime_sha,repository,output):
     validated=validate({'winner_count':1,'winners':[item['winner']]})
     with tempfile.TemporaryDirectory(prefix='zodiac-intake-') as folder:
         path=Path(folder)/'validated.json'; path.write_bytes(encoded(validated))
-        generate(path,output,catalogue_root=root)
+        generate(path,output,catalogue_root=root,publish_at=item['publish_at'])
     manifest=load(Path(output)/'manifest.json'); video=manifest['videos'][0]
     result={**{k:execution[k] for k in ('execution_id','content_id','request_id','request_blob_sha','item_blob_sha')},'runtime_sha':runtime_sha,
         'result_version':2,'status':'rendered','visibility':'private','verified':True,'youtube_video_id':None,
