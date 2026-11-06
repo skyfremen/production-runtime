@@ -1,16 +1,20 @@
 """Real raster/encode regressions for legibility over bright moving footage."""
 import tempfile
+import importlib.util
+import shutil
 from pathlib import Path
 import subprocess
 import unittest
-from PIL import Image
-from zodiac.cards import render_card
 from zodiac.media import encode
 from test_zodiac_flow import fixture
 
 
+@unittest.skipUnless(importlib.util.find_spec('PIL') and shutil.which('ffmpeg'),
+                     'optional media prerequisites missing')
 class ReadabilityTests(unittest.TestCase):
     def test_answers_use_opaque_white_not_low_contrast_cyan(self):
+        from PIL import Image
+        from zodiac.cards import render_card
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / 'card.png'
             render_card(fixture()['winners'][0], path)
@@ -20,6 +24,8 @@ class ReadabilityTests(unittest.TestCase):
                 self.assertEqual(cyan_pixels, 0, 'cyan answers disappear into blue water')
 
     def test_overlay_retains_black_outline_and_darkens_panel_after_encoding(self):
+        from PIL import Image
+        from zodiac.cards import render_card
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             card = root / 'card.png'
