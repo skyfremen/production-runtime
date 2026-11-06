@@ -8,6 +8,56 @@ import unittest
 from unittest.mock import patch
 from test_zodiac_flow import fixture
 
+class ZodiacBackgroundRotationTests(unittest.TestCase):
+    def test_scheduled_slots_rotate_categories_and_avoid_15_recent_clips(self):
+        from datetime import datetime, timedelta, timezone
+        from zoneinfo import ZoneInfo
+        from zodiac.media import select_assets
+
+        slot_config = {'timezone': 'Asia/Singapore',
+                       'slots': ['00:30', '08:00', '19:30']}
+        amounts = {'flowing_silk': 9, 'gold_particles': 6,
+                   'liquid_ink': 9, 'aurora_lights': 6,
+                   'space': 4, 'night_sky': 6}
+        backgrounds = {'assets': [
+            {'id': f'{category}-{i}', 'category': category}
+            for category, size in amounts.items() for i in range(size)
+        ]}
+        audio = {'assets': [{'id': 'a'}, {'id': 'b'}]}
+        first_day = datetime(2026, 11, 8, tzinfo=ZoneInfo('Asia/Singapore'))
+        results = []
+        for day in range(40):
+            for local_slot in slot_config['slots']:
+                hour, minute = map(int, local_slot.split(':'))
+                dt = first_day + timedelta(days=day, hours=hour, minutes=minute)
+                publish_at = dt.astimezone(timezone.utc).isoformat().replace('+00:00', 'Z')
+                cid = f'zodiac-{len(results)}'
+                picked = select_assets(backgrounds, audio, cid,
+                                       publish_at=publish_at, slot_config=slot_config)
+                self.assertEqual(picked, select_assets(
+                    backgrounds, audio, cid, publish_at=publish_at,
+                    slot_config=slot_config), 'retries must be deterministic')
+                bg, track = picked
+                self.assertNotIn(bg['id'], [item['id'] for item in results[-15:]])
+                if results:
+                    self.assertNotEqual(bg['category'], results[-1]['category'])
+                self.assertIn(track, audio['assets'])
+                results.append(bg)
+        self.assertEqual(len(results), 120)
+        self.assertEqual(set(amounts), {bg['category'] for bg in results})
+
+    def test_legacy_and_unscheduled_selection_are_stable(self):
+        from zodiac.media import select_assets
+        backgrounds = {'assets': [{'id':'old-one','category':'space'},
+                                  {'id':'old-two','category':'night_sky'}]}
+        audio = {'assets':[{'id':'track'}]}
+        config = {'timezone':'Asia/Singapore','slots':['00:30','08:00','19:30']}
+        baseline=select_assets(backgrounds,audio,'za-test')
+        self.assertEqual(baseline,select_assets(
+            backgrounds,audio,'za-test',publish_at='2026-11-08T02:00:00Z',
+            slot_config=config))
+
+
 @unittest.skipUnless(importlib.util.find_spec('PIL') and shutil.which('ffmpeg'), 'optional media prerequisites missing')
 class CatalogueMediaTests(unittest.TestCase):
     def test_exact_quarter_second_overlap_produces_six_second_audio(self):
