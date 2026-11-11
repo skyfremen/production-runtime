@@ -1,5 +1,6 @@
 import unittest
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 from urllib.error import HTTPError
 
 import analytics_remote
@@ -11,6 +12,45 @@ class AnalyticsRemoteScopeTests(unittest.TestCase):
         with patch("analytics_remote.urlopen", side_effect=HTTPError("url", 422, "race", {}, None)):
             with self.assertRaises(analytics_remote.RefAdvanced):
                 repo.request("git/refs/heads/main", "PATCH", {"sha": "a" * 40, "force": False})
+
+    def test_concurrent_planner_updates_recover_after_three_conflicts(self):
+        planner = Mock()
+        warehouse = Mock()
+        planner.head_sha.return_value = "a" * 40
+        warehouse.head_sha.return_value = "b" * 40
+        planner.download_tree.side_effect = lambda sha, target: target
+        warehouse.download_tree.side_effect = lambda sha, target: target
+        warehouse.commit_files.return_value = "c" * 40
+        planner.commit_files.side_effect = [
+            analytics_remote.RefAdvanced("planner main advanced"),
+            analytics_remote.RefAdvanced("planner main advanced"),
+            analytics_remote.RefAdvanced("planner main advanced"),
+            "d" * 40,
+        ]
+        runner = Mock(return_value=SimpleNamespace(planner_files=[], warehouse_files=[]))
+        with patch("analytics_remote.time.sleep") as sleep:
+            analytics_remote.run_remote(planner, warehouse, runner=runner)
+        self.assertEqual(runner.call_count, 4)
+        self.assertEqual(planner.commit_files.call_count, 4)
+        self.assertEqual(sleep.call_args_list[0].args, (5,))
+        self.assertEqual(sleep.call_args_list[1].args, (10,))
+        self.assertEqual(sleep.call_args_list[2].args, (15,))
+
+    def test_retry_limit_terminates_after_eight_conflicts(self):
+        planner = Mock()
+        warehouse = Mock()
+        planner.head_sha.return_value = "a" * 40
+        warehouse.head_sha.return_value = "b" * 40
+        planner.download_tree.side_effect = lambda sha, target: target
+        warehouse.download_tree.side_effect = lambda sha, target: target
+        warehouse.commit_files.return_value = "c" * 40
+        planner.commit_files.side_effect = analytics_remote.RefAdvanced("planner main advanced")
+        runner = Mock(return_value=SimpleNamespace(planner_files=[], warehouse_files=[]))
+        with patch("analytics_remote.time.sleep") as sleep:
+            with self.assertRaisesRegex(SystemExit, "after 8 attempts"):
+                analytics_remote.run_remote(planner, warehouse, runner=runner)
+        self.assertEqual(planner.commit_files.call_count, 8)
+        self.assertEqual(sleep.call_count, 7)
 
     def test_planner_write_scope_is_exact(self):
         for path in (
