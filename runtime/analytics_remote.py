@@ -8,6 +8,7 @@ import json
 import os
 import re
 import shutil
+import time
 import tarfile
 import tempfile
 from pathlib import Path
@@ -18,6 +19,8 @@ from analytics import now_utc, run
 
 REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
+MAX_REMOTE_ATTEMPTS = 8
+MAX_RETRY_BACKOFF_SECONDS = 30
 PLANNER_PATHS = {
     "content/analytics-summary.json", "content/planner-analytics.json",
     "content/analytics-index.json", "content/context.json",
@@ -188,7 +191,7 @@ def main():
 def run_remote(planner: GitHubRepository, warehouse: GitHubRepository, runner=run):
     collected_at = now_utc()
     last = None
-    for attempt in range(1, 4):
+    for attempt in range(1, MAX_REMOTE_ATTEMPTS + 1):
         work = Path(tempfile.mkdtemp(prefix="wacky-analytics-"))
         try:
             planner_sha = planner.head_sha()
@@ -205,10 +208,14 @@ def run_remote(planner: GitHubRepository, warehouse: GitHubRepository, runner=ru
             return
         except RefAdvanced as exc:
             last = exc
-            print(f"::warning::{exc}; retrying from latest main ({attempt}/3)")
+            if attempt < MAX_REMOTE_ATTEMPTS:
+                delay = min(5 * attempt, MAX_RETRY_BACKOFF_SECONDS)
+                print(f"::warning::{exc}; retrying from latest main "
+                      f"({attempt}/{MAX_REMOTE_ATTEMPTS}) after {delay}s")
+                time.sleep(delay)
         finally:
             shutil.rmtree(work, ignore_errors=True)
-    raise SystemExit(f"ANALYTICS_REMOTE_RETRY_EXHAUSTED {last}")
+    raise SystemExit(f"ANALYTICS_REMOTE_RETRY_EXHAUSTED after {MAX_REMOTE_ATTEMPTS} attempts: {last}")
 
 
 if __name__ == "__main__":
